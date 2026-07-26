@@ -178,6 +178,41 @@ def kind_clause(kind, alias=None):
             f"({','.join('?' * len(OFF_SCALE_KINDS))}))", list(OFF_SCALE_KINDS))
 
 
+WORD_HINT = ("Single-word lexicon entries are excluded (different 0-5 scale); "
+             "pass kind='word' for those.")
+
+
+def rating_note(found, sf, params, kc, kp, kind, min_score):
+    """Why did top_rated come back empty?
+
+    This tool ranks by human score, so `score >= ?` silently drops every
+    unrated line — in SQL `NULL >= 0` is NULL, never true. Most of a corpus is
+    unrated (engine output nobody sat down and graded), and whole kinds can be
+    unrated end to end: slate_winner lines are best-of-N picks, eval lines are
+    verdicts. For those, NO min_score will ever return a row.
+
+    An empty list alone reads as "the corpus has nothing", which is wrong and
+    sends the caller away. Separate the two causes and name them: the bar was
+    too high (lower it), or this slice carries no ratings at all (go to
+    search_humor, which does not rank and will happily show them).
+    """
+    if found:
+        return None if kind else WORD_HINT
+    r = db().execute(f"SELECT count(*) n, count(score) rated FROM lines "
+                     f"WHERE {sf}{kc}", params + kp).fetchone()
+    where = f"kind={kind!r}" if kind else "this selection"
+    reach = f"search_humor(kind={kind!r})" if kind else "search_humor"
+    if not r["n"]:
+        return f"Nothing in the corpus matches {where}."
+    if not r["rated"]:
+        return (f"{r['n']} line(s) match {where}, but none carry a human score, "
+                f"so top_rated cannot rank them at any min_score — this is a "
+                f"property of the material, not of your threshold. "
+                f"Read them with {reach} instead.")
+    return (f"{r['rated']} of {r['n']} line(s) matching {where} are human-rated, "
+            f"but none reach min_score={min_score}. Lower min_score.")
+
+
 def t_top_rated(limit=20, source=None, min_score=2, kind=None,
                 include_restricted=False, include_hidden=False):
     asked = limit
@@ -185,13 +220,12 @@ def t_top_rated(limit=20, source=None, min_score=2, kind=None,
     sf, params = src_filter(include_restricted, source, include_hidden)
     kc, kp = kind_clause(kind)
     rows = db().execute(
-        f"SELECT * FROM lines WHERE {sf}{kc} AND score >= ? "
+        f"SELECT * FROM lines WHERE {sf}{kc} AND score IS NOT NULL AND score >= ? "
         f"ORDER BY score DESC, laugh DESC NULLS LAST LIMIT ?",
         params + kp + [min_score, limit]).fetchall()
     return capped({"count": len(rows), "results": [row_out(r) for r in rows],
-            "note": None if kind else
-            "Single-word lexicon entries are excluded (different 0-5 scale); "
-            "pass kind='word' for those."}, was_capped, asked)
+                   "note": rating_note(rows, sf, params, kc, kp, kind, min_score)},
+                  was_capped, asked)
 
 
 def t_taste_profile(rater=None, n=12, kind=None, include_restricted=False,
@@ -319,10 +353,26 @@ def t_style_pack(topic=None, n=8, include_restricted=False, include_hidden=False
         s = db().execute("SELECT * FROM sources WHERE id=?", (sid,)).fetchone()
         if s:
             creds.append(f"{s['title']} — {s['authors']} ({s['license']})")
-    return {
+    out = {
         "exemplars": [{"text": r["text"], "context": r.get("context"),
                        "score": r.get("score"), "credit": r["credit"]}
                       for r in ex["results"]],
+    }
+    # The exemplars are the only topic-aware part of this brief; liked/disliked
+    # are corpus-wide calibration either way. If the topic matched nothing, a
+    # silently empty `exemplars` beside a full brief still reads as a valid
+    # answer about that topic. Say plainly that it is not one.
+    if topic:
+        out["topic"] = topic
+        out["topic_matched"] = bool(ex["results"])
+        if not ex["results"]:
+            out["topic_note"] = (
+                f"No human-rated line matches {topic!r}, so there are no "
+                f"topic exemplars. Everything below is corpus-wide register "
+                f"calibration and says nothing about {topic!r} — use it as a "
+                f"voice brief, not a topic brief. search_humor({topic!r}) will "
+                f"find unrated lines on the subject if any exist.")
+    out.update({
         "liked": [r["text"] for r in liked["liked"]],
         "disliked": [r["text"] for r in liked["disliked"]],
         "score_distribution": liked["score_distribution"],
@@ -331,7 +381,8 @@ def t_style_pack(topic=None, n=8, include_restricted=False, include_hidden=False
         "usage": "Use the exemplars for register and rhythm, not for verbatim reuse. "
                  "If any output quotes or closely paraphrases an exemplar, reproduce "
                  "the attribution_block alongside it.",
-    }
+    })
+    return out
 
 
 def t_stats():

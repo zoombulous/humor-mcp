@@ -51,7 +51,13 @@ _pack("own", {"title": "Own work", "authors": "A. Owner", "license": "CC-BY-4.0"
               "score": 0, "rater": "owner", "note": "too quippy"},
              {"text": "A weaker attempt nobody laughed at.", "context": "", "kind": "joke",
               "score": 1, "rater": "owner"},
-             {"text": "therapy", "kind": "word", "score": 5, "rater": "owner"}],
+             {"text": "therapy", "kind": "word", "score": 5, "rater": "owner"},
+             # Whole kinds carry no human score: slate_winner lines are best-of-N
+             # picks the engine chose, eval lines are verdicts. They are the shape
+             # that made top_rated return a bare empty list at every min_score.
+             {"text": "The basil knows things about you now.", "context": "the spices",
+              "kind": "slate_winner", "attribution": "engine best-of-N winner"},
+             {"text": "Verdict: the second one lands.", "kind": "eval"}],
       pairs=[{"prompt": "Tell me a joke.", "chosen": "The good one.",
               "rejected": "The bad one.", "weight": 1.0},
              {"prompt": "Again.", "chosen": "Also good.", "rejected": "Also bad."}])
@@ -150,6 +156,26 @@ REQS = [
     {"jsonrpc": "2.0", "id": 22, "method": "tools/call",
      "params": {"name": "search_humor",
                 "arguments": {"limit": 5, "source": "locked"}}},
+    # top_rated ranks by human score, so unrated kinds can never appear in it at
+    # any threshold. It must say so — an unexplained empty list reads as "the
+    # corpus has none of these", which sends the caller away from lines that are
+    # right there. 23/24 are the unrated case, 26 the merely-too-high-bar case.
+    {"jsonrpc": "2.0", "id": 23, "method": "tools/call",
+     "params": {"name": "top_rated", "arguments": {"kind": "slate_winner"}}},
+    {"jsonrpc": "2.0", "id": 24, "method": "tools/call",
+     "params": {"name": "top_rated",
+                "arguments": {"kind": "slate_winner", "min_score": 0}}},
+    {"jsonrpc": "2.0", "id": 25, "method": "tools/call",
+     "params": {"name": "search_humor",
+                "arguments": {"kind": "slate_winner", "limit": 5}}},
+    {"jsonrpc": "2.0", "id": 26, "method": "tools/call",
+     "params": {"name": "top_rated", "arguments": {"kind": "joke", "min_score": 99}}},
+    # style_pack must not hand back a corpus-wide brief as if it were about the
+    # topic asked for
+    {"jsonrpc": "2.0", "id": 27, "method": "tools/call",
+     "params": {"name": "style_pack", "arguments": {"topic": "xylophone", "n": 3}}},
+    {"jsonrpc": "2.0", "id": 28, "method": "tools/call",
+     "params": {"name": "style_pack", "arguments": {"topic": "dog", "n": 3}}},
 ]
 
 p = subprocess.run([sys.executable, "-m", "humor_mcp.cli", "serve"],
@@ -187,7 +213,7 @@ check(all("inputSchema" in t for t in resp[2]["result"]["tools"]), "every tool h
 
 print("\ncorpus")
 st = body(3)
-check(st["lines"] == 10, f"every fixture line loaded = {st['lines']}")
+check(st["lines"] == 12, f"every fixture line loaded = {st['lines']}")
 check(st["pairs"] == 42, f"every fixture pair loaded = {st['pairs']}")
 check(st["sources"] == 4, f"sources = {st['sources']}")
 check({"own", "locked", "offrubric", "unverified"} == set(st["by_source"]) | {"offrubric"},
@@ -245,7 +271,7 @@ print(q('''select count(*) from (select source_id,text,attribution from lines
 """ % FDB], capture_output=True, text=True)
 dupes, total, with_bd, split = (int(x) for x in p.stdout.split())
 check(dupes == 0, f"no (text, attribution) duplicates in the build: {dupes}")
-check(total == 10, f"all fixture lines present: {total}")
+check(total == 12, f"all fixture lines present: {total}")
 check(with_bd == 2, f"breakdown json survives the build: {with_bd}")
 check(split == 1, f"same text under different credit stays separate: {split} case(s)")
 
@@ -366,6 +392,51 @@ check(sh["min_score"]["type"] == "number", "None default with a numeric name -> 
 check(all(pr.get("description") for t in defs
           for pr in t["inputSchema"]["properties"].values()),
       "every advertised parameter carries a description")
+
+print("\nan empty result explains itself")
+d23, d24, d25, d26 = body(23), body(24), body(25), body(26)
+check(d23["count"] == 0 and d23["note"], "unrated kind returns empty WITH a reason")
+check("none carry a human score" in d23["note"],
+      f"and names the cause: {d23['note'][:60]}...")
+check("search_humor" in d23["note"], "and points at the tool that CAN show them")
+check(d24["note"] == d23["note"],
+      "min_score=0 changes nothing — the ratings are absent, not low")
+check(d25["count"] > 0,
+      f"the same lines are reachable via search_humor: {d25['count']}")
+check(d26["count"] == 0 and "min_score" in d26["note"],
+      "a bar nothing clears says to lower the bar")
+check(d23["note"] != d26["note"], "the two empty cases are told apart")
+
+# The structural version of the above: no kind in the corpus may come back
+# empty and silent. A unit test per kind would go stale the moment a pack adds
+# one, so enumerate whatever is actually loaded.
+p = subprocess.run([sys.executable, "-c", """
+import os, sys, json
+sys.path.insert(0, r"%s")
+os.environ["HUMOR_DB"] = r"%s"
+from humor_mcp import server
+kinds = [r[0] for r in server.db().execute(
+    "select distinct kind from lines where kind is not null order by kind")]
+silent = [(k, ms) for k in kinds for ms in (0, 2)
+          if server.t_top_rated(kind=k, min_score=ms)["count"] == 0
+          and not server.t_top_rated(kind=k, min_score=ms)["note"]]
+print(json.dumps([kinds, silent]))
+""" % (ROOT, FDB)], capture_output=True, text=True, encoding="utf-8", timeout=120)
+kinds, silent = json.loads(p.stdout.strip().splitlines()[-1])
+check(len(kinds) >= 4, f"fixture covers several kinds: {kinds}")
+check(silent == [], f"no kind returns a silent empty: {silent}")
+
+print("\nstyle_pack does not pass a corpus-wide brief off as a topic brief")
+d27, d28 = body(27), body(28)
+check(d27["exemplars"] == [] and d27["topic_matched"] is False,
+      "a topic with no match is marked unmatched")
+check("topic_note" in d27 and "xylophone" in d27["topic_note"],
+      "and says so in words, naming the topic")
+check(d27["liked"] and "corpus-wide" in d27["topic_note"],
+      "the calibration still ships, correctly labelled as not topical")
+check(d28["exemplars"] and d28["topic_matched"] is True,
+      f"a topic that does match is marked matched: {len(d28['exemplars'])} exemplars")
+check("topic_note" not in d28, "and carries no warning")
 
 print("\nrobustness")
 check(not resp[12].get("result", {}).get("isError"), "FTS-hostile query handled")
