@@ -50,6 +50,13 @@ uvx humor-mcp where            # or: pip install humor-mcp
 claude mcp add humor -- uvx humor-mcp
 ```
 
+No account or checkout needed; `uvx` fetches it from PyPI. To run the unreleased
+tip instead, point uvx at the repo:
+
+```bash
+uvx --from git+https://github.com/zoombulous/humor-mcp humor-mcp
+```
+
 **Cloned** — also gets the bundled packs, and needs nothing installed:
 
 ```bash
