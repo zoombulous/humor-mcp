@@ -254,6 +254,30 @@ DROP TABLE IF EXISTS sources;
 """
 
 
+def outgoing(new_ids):
+    """Packs the database already holds that this build will not put back.
+
+    A pack is not kept by being in the old database — every table is dropped and
+    rebuilt from whatever packs are readable right now, so a pack survives only
+    by being read again. Two ordinary situations therefore destroy data with no
+    prompt at all: building from a checkout that lacks a pack your corpus has (a
+    fresh clone, a second worktree), and `--only`, which rebuilds the WHOLE
+    database from just the named packs. Both look like a normal build. Name what
+    is about to leave, before it leaves.
+    """
+    if not DB.exists():
+        return []
+    try:
+        con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        rows = con.execute(
+            "SELECT s.id, (SELECT count(*) FROM lines l WHERE l.source_id = s.id) "
+            "FROM sources s ORDER BY s.id").fetchall()
+        con.close()
+    except sqlite3.Error:
+        return []            # no schema yet, or unreadable: nothing to lose
+    return [(i, n) for i, n in rows if i not in new_ids]
+
+
 def build(only=None):
     # Rebuild IN PLACE rather than deleting the file. A running MCP server holds
     # an open handle, and Windows refuses to unlink an open file — which broke
@@ -273,6 +297,17 @@ def build(only=None):
     # exist yet — without this, the first command anyone runs is an opaque
     # "unable to open database file" from sqlite.
     DB.parent.mkdir(parents=True, exist_ok=True)
+    going = outgoing({m["id"] for _, m in packs})
+    if going:
+        print(f"!! this build REMOVES {len(going)} pack(s) already in {DB}:")
+        for i, n in going:
+            print(f"     {i}  ({n} lines)")
+        print("   Nothing in this build supplies them. Packs were read from:")
+        for d in paths.pack_dirs():
+            print(f"     {d}")
+        print("   --only rebuilds the whole database from just the ids you name."
+              "\n   Set HUMOR_DB to build somewhere else if that is not what you"
+              " meant.\n")
     con = sqlite3.connect(DB)
     con.executescript(DROP)
     con.executescript(SCHEMA)

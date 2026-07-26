@@ -57,7 +57,10 @@ _pack("own", {"title": "Own work", "authors": "A. Owner", "license": "CC-BY-4.0"
              # that made top_rated return a bare empty list at every min_score.
              {"text": "The basil knows things about you now.", "context": "the spices",
               "kind": "slate_winner", "attribution": "engine best-of-N winner"},
-             {"text": "Verdict: the second one lands.", "kind": "eval"}],
+             {"text": "Verdict: the second one lands.", "kind": "eval"},
+             # An auto-segmented transcript offcut: starts lowercase, stops mid
+             # sentence. Reads like a joke that died rather than half of one.
+             {"text": "and then the mailman said", "kind": "joke"}],
       pairs=[{"prompt": "Tell me a joke.", "chosen": "The good one.",
               "rejected": "The bad one.", "weight": 1.0},
              {"prompt": "Again.", "chosen": "Also good.", "rejected": "Also bad."}])
@@ -176,6 +179,18 @@ REQS = [
      "params": {"name": "style_pack", "arguments": {"topic": "xylophone", "n": 3}}},
     {"jsonrpc": "2.0", "id": 28, "method": "tools/call",
      "params": {"name": "style_pack", "arguments": {"topic": "dog", "n": 3}}},
+    # the engine's best-of-N picks are unrated, so every score-gated query drops
+    # them. They are the most on-register material there is and belong in the
+    # brief — but labelled, so a machine's pick is never read as a human verdict.
+    {"jsonrpc": "2.0", "id": 29, "method": "tools/call",
+     "params": {"name": "style_pack", "arguments": {"n": 4}}},
+    # transcript offcuts are filterable, but only when asked for — defaulting it
+    # on would silently drop real lines from packs that skip a final full stop
+    {"jsonrpc": "2.0", "id": 30, "method": "tools/call",
+     "params": {"name": "search_humor", "arguments": {"query": "mailman", "limit": 5}}},
+    {"jsonrpc": "2.0", "id": 31, "method": "tools/call",
+     "params": {"name": "search_humor",
+                "arguments": {"query": "mailman", "limit": 5, "whole_lines": True}}},
 ]
 
 p = subprocess.run([sys.executable, "-m", "humor_mcp.cli", "serve"],
@@ -213,7 +228,7 @@ check(all("inputSchema" in t for t in resp[2]["result"]["tools"]), "every tool h
 
 print("\ncorpus")
 st = body(3)
-check(st["lines"] == 12, f"every fixture line loaded = {st['lines']}")
+check(st["lines"] == 13, f"every fixture line loaded = {st['lines']}")
 check(st["pairs"] == 42, f"every fixture pair loaded = {st['pairs']}")
 check(st["sources"] == 4, f"sources = {st['sources']}")
 check({"own", "locked", "offrubric", "unverified"} == set(st["by_source"]) | {"offrubric"},
@@ -271,7 +286,7 @@ print(q('''select count(*) from (select source_id,text,attribution from lines
 """ % FDB], capture_output=True, text=True)
 dupes, total, with_bd, split = (int(x) for x in p.stdout.split())
 check(dupes == 0, f"no (text, attribution) duplicates in the build: {dupes}")
-check(total == 12, f"all fixture lines present: {total}")
+check(total == 13, f"all fixture lines present: {total}")
 check(with_bd == 2, f"breakdown json survives the build: {with_bd}")
 check(split == 1, f"same text under different credit stays separate: {split} case(s)")
 
@@ -437,6 +452,59 @@ check(d27["liked"] and "corpus-wide" in d27["topic_note"],
 check(d28["exemplars"] and d28["topic_matched"] is True,
       f"a topic that does match is marked matched: {len(d28['exemplars'])} exemplars")
 check("topic_note" not in d28, "and carries no warning")
+
+print("\nthe engine's own picks reach the style brief, labelled")
+d29 = body(29)
+bases = [e["basis"] for e in d29["exemplars"]]
+check(all(e.get("basis") for e in d29["exemplars"]),
+      f"every exemplar states what it rests on: {bases}")
+check(any(b.startswith("engine best-of-N") for b in bases),
+      "unrated best-of-N picks are no longer excluded by the score gate")
+check(any(b.startswith("human-rated") for b in bases),
+      "and human ratings still lead — picks do not crowd them out")
+check(any(e["text"].startswith("The basil") for e in d29["exemplars"]),
+      "the specific unrated slate_winner is in there")
+
+print("\ntranscript offcuts are filterable, opt-in only")
+d30, d31 = body(30), body(31)
+t30 = {x["text"] for x in d30["results"]}
+t31 = {x["text"] for x in d31["results"]}
+check("and then the mailman said" in t30,
+      "an offcut is returned by default — nothing is hidden behind your back")
+check("and then the mailman said" not in t31, "whole_lines drops it")
+check(any(x.startswith("The dog has filed") for x in t31),
+      f"and keeps the complete line on the same query: {len(t31)} kept")
+_h = subprocess.run([sys.executable, "-c", """
+import sys, json
+sys.path.insert(0, r"%s")
+from humor_mcp import server
+w = server.whole_line
+print(json.dumps([w("The dog has filed a complaint."), w("and then he said"),
+                  w("Couples therapy is"), w('"Quoted and finished."'),
+                  w("A pun with no full stop")]))
+""" % ROOT], capture_output=True, text=True, encoding="utf-8", timeout=120)
+whole, lower, cut, quoted, nostop = json.loads(_h.stdout.strip().splitlines()[-1])
+check((whole, lower, cut) == (1, 0, 0), "complete kept, lowercase and cut-off dropped")
+check(quoted == 1, "a quoted line that finishes is complete")
+check(nostop == 0,
+      "KNOWN LIMIT: a real line with no full stop is called an offcut — the "
+      "reason this is opt-in")
+
+print("\nbuild names what it is about to delete")
+WARN_DB = FIXTURE / "warn.db"
+shutil.copyfile(FDB, WARN_DB)
+BENV = {**os.environ, "HUMOR_PACKS": str(FPACKS), "HUMOR_DB": str(WARN_DB)}
+_w = subprocess.run([sys.executable, "-m", "humor_mcp.cli", "build", "--only", "own"],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=300, env=BENV).stdout
+check("REMOVES" in _w, "a build that drops packs says so before dropping them")
+check("locked" in _w and "unverified" in _w,
+      "and names each one it is about to lose")
+check("(3 lines)" in _w, "with the line count, so the size of the loss is visible")
+_f = subprocess.run([sys.executable, "-m", "humor_mcp.cli", "build"],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=300, env=BENV).stdout
+check("REMOVES" not in _f, "a build that loses nothing does not cry wolf")
 
 print("\nrobustness")
 check(not resp[12].get("result", {}).get("isError"), "FTS-hostile query handled")

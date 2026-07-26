@@ -22,6 +22,27 @@ force_utf8()
 _con = None
 
 
+TERMINAL = ".!?\"')]…"
+
+
+def whole_line(t):
+    """Does this read as a complete utterance rather than a transcript offcut?
+
+    Auto-segmented stand-up arrives cut mid-sentence — "Couples therapy is",
+    "when it doesn't work out, because then you just have" — and those land in
+    search results looking like jokes that failed rather than halves of one.
+    Capitalised start plus terminal punctuation separates them cheaply.
+
+    It is a heuristic and it is wrong on tidy corpora that omit a final stop
+    (several CUP puns do), which is exactly why nothing filters on it unless a
+    caller asks. Keep it that way: a default that silently drops real lines from
+    somebody else's pack would be a worse bug than the one it fixes.
+    """
+    t = (t or "").strip()
+    return 1 if t and (t[0].isupper() or t[0].isdigit() or t[0] in "\"'“‘") \
+        and t[-1] in TERMINAL else 0
+
+
 def db():
     global _con
     if _con is None:
@@ -30,6 +51,7 @@ def db():
                 f"no corpus at {DB_PATH}. Run `python build.py` first, or set HUMOR_DB.")
         _con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
         _con.row_factory = sqlite3.Row
+        _con.create_function("whole_line", 1, whole_line, deterministic=True)
     return _con
 
 
@@ -139,7 +161,7 @@ def src_filter(include_restricted, source, include_hidden=False, alias=None):
 
 # ------------------------------------------------------------------ the tools
 def t_search(query="", source=None, kind=None, min_score=None, limit=10,
-             include_restricted=False, include_hidden=False):
+             whole_lines=False, include_restricted=False, include_hidden=False):
     asked, m = limit, fts_query(query)
     limit, was_capped = clamp(limit, 10)
     sf, params = src_filter(include_restricted, source, include_hidden, alias="l")
@@ -148,6 +170,8 @@ def t_search(query="", source=None, kind=None, min_score=None, limit=10,
         extra.append("l.kind = ?"); ex.append(kind)
     if min_score is not None:
         extra.append("l.score >= ?"); ex.append(min_score)
+    if whole_lines:
+        extra.append("whole_line(l.text) = 1")
     extra_sql = (" AND " + " AND ".join(extra)) if extra else ""
 
     if m:
@@ -336,16 +360,58 @@ def t_sources():
             }}
 
 
+# Best-of-N winners the engine picked for itself. Nobody scored them, so every
+# score-gated query drops them — including, until now, the style brief, which is
+# the one place they most belong: they are the most on-register material in the
+# corpus. They rest on a different authority than a human rating, so each
+# exemplar says which one it rests on rather than passing a machine's pick off
+# as a verdict.
+PICK_KINDS = ("slate_winner",)
+
+
+def basis_of(r):
+    if r.get("score") is not None:
+        return f"human-rated {r['score']}"
+    if r.get("kind") in PICK_KINDS:
+        return "engine best-of-N pick, unrated"
+    return "unrated"
+
+
+def exemplars_for(topic, n, include_restricted, include_hidden):
+    """Exemplars drawn from both authorities, neither crowding the other out.
+
+    Rated lines lead — a human actually ruled on them — but taking them first
+    and filling to n would shut the picks out entirely whenever the corpus has
+    more than n rated lines, which is the common case. So each authority gets
+    reserved slots and whichever pool runs short is backfilled from the other.
+    """
+    def q(**kw):
+        return t_search(query=topic or "", limit=n,
+                        include_restricted=include_restricted,
+                        include_hidden=include_hidden, **kw)["results"]
+
+    rated = (q(min_score=2) if topic else
+             t_top_rated(limit=n, include_restricted=include_restricted,
+                         include_hidden=include_hidden)["results"])
+    picks = [r for k in PICK_KINDS for r in q(kind=k)]
+
+    half = (n + 1) // 2
+    chosen, seen = [], set()
+    for r in rated[:half] + picks[:n - half] + rated[half:] + picks[n - half:]:
+        if len(chosen) >= n:
+            break
+        if r["id"] not in seen:
+            seen.add(r["id"])
+            chosen.append(r)
+    return chosen
+
+
 def t_style_pack(topic=None, n=8, include_restricted=False, include_hidden=False):
     """A compact brief you can paste into a system prompt."""
     n, _ = clamp(n, 8)
     liked = t_taste_profile(n=n, include_restricted=include_restricted,
                             include_hidden=include_hidden)
-    ex = t_search(query=topic or "", min_score=2, limit=n,
-                  include_restricted=include_restricted,
-                  include_hidden=include_hidden) if topic else \
-        t_top_rated(limit=n, include_restricted=include_restricted,
-                    include_hidden=include_hidden)
+    ex = {"results": exemplars_for(topic, n, include_restricted, include_hidden)}
     used = sorted({r["credit"]["source"] for r in ex["results"]} |
                   {r["credit"]["source"] for r in liked["liked"]})
     creds = []
@@ -355,7 +421,8 @@ def t_style_pack(topic=None, n=8, include_restricted=False, include_hidden=False
             creds.append(f"{s['title']} — {s['authors']} ({s['license']})")
     out = {
         "exemplars": [{"text": r["text"], "context": r.get("context"),
-                       "score": r.get("score"), "credit": r["credit"]}
+                       "score": r.get("score"), "basis": basis_of(r),
+                       "credit": r["credit"]}
                       for r in ex["results"]],
     }
     # The exemplars are the only topic-aware part of this brief; liked/disliked
@@ -367,7 +434,7 @@ def t_style_pack(topic=None, n=8, include_restricted=False, include_hidden=False
         out["topic_matched"] = bool(ex["results"])
         if not ex["results"]:
             out["topic_note"] = (
-                f"No human-rated line matches {topic!r}, so there are no "
+                f"Nothing rated or picked matches {topic!r}, so there are no "
                 f"topic exemplars. Everything below is corpus-wide register "
                 f"calibration and says nothing about {topic!r} — use it as a "
                 f"voice brief, not a topic brief. search_humor({topic!r}) will "
@@ -415,6 +482,8 @@ PARAM_DOC = {
     "source": "restrict to one pack id — naming a pack overrides both gates below",
     "kind": "joke / pun / candidate / slate_winner / eval / utterance / word",
     "min_score": "only lines a human scored at least this highly",
+    "whole_lines": ("drop transcript offcuts that start or stop mid-sentence; "
+                    "heuristic, and strict about a final full stop"),
     "limit": "how many results (capped at %d)" % MAX_LIMIT,
     "n": "how many examples per side (capped at %d)" % MAX_LIMIT,
     "rater": "restrict to one rater's judgements",
