@@ -5,9 +5,34 @@ waveform alone.
 
     python audio_reactions.py set.mp3            # list what it hears
 
-This is the signal a transcript's [laughter] markers stand in for, except
-measured: real timings, real durations, and a strength that reflects how long
-and how hard the room actually went, rather than which word the captioner typed.
+⚠️ MEASURED AGAINST REAL AUDIO, THIS DOES NOT WORK.
+
+  Scored on 14 minutes of real stand-up with per-line ground truth from an
+  AudioSet classifier: F1 0.24 (precision 0.15, recall 0.54) — 93 detections for
+  26 actual laughs.
+
+  It is not a tuning problem. On that recording the features do not separate at
+  all:
+
+                        laughter   speech
+      spectral flatness   0.0582   0.0549
+      4-8 Hz modulation   0.3255   0.3246
+      loudness             -35.0    -33.6 dB
+
+  The best single threshold on any of them scores exactly the majority-class
+  baseline — nothing beats always guessing "speech". The synthetic tests it
+  passes are close to circular: they build speech as a pure harmonic stack
+  (flatness 0.004) and laughter as modulated noise (0.47), which is the very
+  gap being detected. Real mic'd, compressed, reverberant room audio erases it.
+
+  For real recordings use a trained classifier — MIT/ast-finetuned-audioset
+  -10-10-0.4593 has laughter and applause classes — and feed its output to
+  `import_audio.py --reactions`. This module remains as the reference
+  implementation of that interface and for cleanly separated audio.
+
+What it was trying to be: the signal a transcript's [laughter] markers stand in
+for, except measured — real timings, real durations, and a strength reflecting
+how long the room actually went rather than which word the captioner typed.
 
 WHAT IT IS
   A heuristic signal detector, not a trained classifier. Two features do the

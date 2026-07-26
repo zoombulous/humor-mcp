@@ -5,22 +5,29 @@ Build a pack from a recording plus a timestamped transcript.
     python import_audio.py --id tight-five --audio set.mp3 --transcript set.srt \
         --performer "Your Name" --title "Comedy Cellar, March" --i-own-this
 
-    python import_audio.py --audio set.mp3 --dry-run     # just show what it hears
+    python import_audio.py --id tight-five --reactions ast.json \
+        --transcript set.srt --performer "Their Name"
 
 WHY BOTH FILES
-  The audio supplies the reactions, the transcript supplies the words. Neither
-  alone is enough, and the combination is strictly better than either path on
-  its own:
-
-    transcript only  needs the captioner to have typed [laughter]. Auto-generated
-                     captions never do, which is most of what people have.
-    audio only       tells you exactly when the room went and how hard, but not
-                     what was said.
-    both             real timings and real strength, attached to real words —
-                     and it works on transcripts with no markers at all.
+  The reactions say WHEN the room went and how hard; the transcript says WHAT
+  was said. Aligning them gives you lines anchored to real audience response,
+  and it works on transcripts with no [laughter] markers at all — which is all
+  auto-generated captions.
 
   Whisper .json, .srt and .vtt all carry timings. A plain .txt does not, so it
   cannot be aligned; use import_transcript.py for that.
+
+WHERE THE REACTIONS COME FROM
+  Prefer --reactions: a timeline from a trained classifier, in the simple JSON
+  shape documented on load_reactions() below.
+
+  --audio runs the bundled heuristic detector instead, and you should know that
+  it DOES NOT WORK on real audience recordings. Scored against 14 minutes of
+  real stand-up with per-line ground truth: F1 0.24, 93 detections for 26 actual
+  laughs. Its features do not separate — on that recording median spectral
+  flatness was 0.058 for laughter and 0.055 for speech. It survives here for
+  synthetic and cleanly-separated audio, and as a worked example of the
+  interface, not as something to trust.
 
   This does not transcribe. Nothing here downloads a model or calls a service.
   Bring a transcript from whatever you already use — YouTube's, Whisper's, your
@@ -35,6 +42,57 @@ from ._utf8 import force_utf8  # noqa: E402
 force_utf8()
 
 from . import transcripts  # noqa: E402
+
+
+def load_reactions(path):
+    """A reaction timeline produced by something that actually works.
+
+    Same shape the bundled detector emits, so anything can produce it — an
+    AudioSet classifier, a hand-marked list, another tool's output:
+
+        [{"start": 12.3, "end": 14.1, "kind": "laughter", "strength": 0.6}, ...]
+
+    Only `start` is required. `end` defaults to start + 1s, `kind` to
+    "laughter", `strength` to 0.5.
+    """
+    if not path.exists():
+        sys.exit(f"no such file: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        sys.exit(f"{path}: not valid JSON — {e}")
+    if isinstance(data, dict):
+        data = data.get("reactions") or data.get("events") or []
+    if not isinstance(data, list):
+        sys.exit(f"{path}: expected a JSON list of reactions, got {type(data).__name__}")
+
+    out, problems = [], []
+    for i, r in enumerate(data):
+        if not isinstance(r, dict) or "start" not in r:
+            problems.append(f"  item {i}: needs at least a numeric 'start'")
+            continue
+        try:
+            start = float(r["start"])
+            end = float(r.get("end", start + 1.0))
+        except (TypeError, ValueError):
+            problems.append(f"  item {i}: 'start'/'end' must be numbers")
+            continue
+        if end <= start:
+            end = start + 1.0
+        kind = str(r.get("kind") or "laughter")
+        try:
+            strength = float(r.get("strength", 0.5))
+        except (TypeError, ValueError):
+            strength = 0.5
+        out.append({"start": round(start, 3), "end": round(end, 3),
+                    "dur": round(end - start, 3), "kind": kind,
+                    "strength": round(max(0.0, min(1.0, strength)), 3)})
+    if problems:
+        sys.exit(f"{path}: {len(problems)} unusable entr(ies):\n" + "\n".join(problems[:8]))
+    if not out:
+        sys.exit(f"{path}: no reactions in the file")
+    out.sort(key=lambda e: e["start"])
+    return out
 
 
 def align(cues, events, ctx_n=2, lead=0.35, min_chars=12):
@@ -71,7 +129,13 @@ def align(cues, events, ctx_n=2, lead=0.35, min_chars=12):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--audio", required=True)
+    ap.add_argument("--audio", help="the recording; optional if --reactions is given")
+    ap.add_argument("--reactions", metavar="JSON",
+                    help="a reaction timeline from a real classifier, instead of "
+                         "the bundled heuristic detector (which does not work on "
+                         "real audience audio — see the README). JSON list of "
+                         '{"start": seconds, "end": seconds, "kind": '
+                         '"laughter"|"applause", "strength": 0..1}')
     ap.add_argument("--transcript")
     ap.add_argument("--id")
     ap.add_argument("--performer")
@@ -93,21 +157,32 @@ def main():
     a = ap.parse_args()
     PACKS = Path(a.packs_dir) if a.packs_dir else paths.import_target()
 
-    from . import audio_reactions as ar
+    if not a.audio and not a.reactions:
+        sys.exit("give me --reactions (a timeline from a real classifier) or "
+                 "--audio (which uses the bundled heuristic detector — see the "
+                 "README for how badly that performs on real audience audio).")
 
-    audio = Path(a.audio)
-    if not audio.exists():
-        sys.exit(f"no such file: {audio}")
-    try:
-        y, sr = ar.load(audio)
-    except Exception as e:
-        sys.exit(f"could not read {audio.name}: {e}\n"
-                 "wav/flac/ogg/mp3 work directly; m4a and aac need converting "
-                 "with ffmpeg first.")
-    events = ar.detect(y, sr, min_dur=a.min_reaction,
-                       flat_speech_max=a.flat_speech_max)
-
-    print(f"{audio.name}: {len(y)/sr/60:.1f} min, {len(events)} reaction(s) detected")
+    if a.reactions:
+        events, label = load_reactions(Path(a.reactions)), Path(a.reactions).name
+        print(f"{label}: {len(events)} reaction(s) supplied")
+    else:
+        from . import audio_reactions as ar
+        audio = Path(a.audio)
+        if not audio.exists():
+            sys.exit(f"no such file: {audio}")
+        try:
+            y, sr = ar.load(audio)
+        except Exception as e:
+            sys.exit(f"could not read {audio.name}: {e}\n"
+                     "wav/flac/ogg/mp3 work directly; m4a and aac need converting "
+                     "with ffmpeg first.")
+        events = ar.detect(y, sr, min_dur=a.min_reaction,
+                           flat_speech_max=a.flat_speech_max)
+        label = audio.name
+        print(f"{audio.name}: {len(y)/sr/60:.1f} min, {len(events)} reaction(s) detected")
+        print("  NOTE: the bundled detector scored F1 0.24 against real stand-up "
+              "with ground truth.\n  Prefer --reactions from a trained classifier; "
+              "see the README.")
     kinds = {}
     for e in events:
         kinds[e["kind"]] = kinds.get(e["kind"], 0) + 1
@@ -140,12 +215,12 @@ def main():
         sys.exit("reactions were detected but none lined up with a transcript cue — "
                  "are the audio and transcript from the same recording?")
 
-    title = a.title or meta.get("title") or audio.stem
+    title = a.title or meta.get("title") or Path(label).stem
     url = a.url or meta.get("url") or ""
     cred = f'{a.performer} — "{title}"' + (f" ({url})" if url else "")
     for r in rows:
         r["attribution"] = cred
-        r["meta"] = json.dumps({**r["meta"], "audio": audio.name, "set": title},
+        r["meta"] = json.dumps({**r["meta"], "source": label, "set": title},
                                ensure_ascii=False)
 
     lic = a.license or ("CC-BY-4.0" if a.i_own_this else "ALL-RIGHTS-RESERVED")

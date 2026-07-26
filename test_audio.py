@@ -2,10 +2,18 @@
 """
 Test the reaction detector against synthesized audio with known ground truth.
 
-Synthetic, not real, so it proves the discriminator works on the acoustic
-properties it claims to use — harmonic vs broadband, rhythmic vs not — and that
-speech alone produces no detections. Real rooms are messier; the CLI exists so
-you can look before you trust it.
+⚠️ THESE TESTS PASSING DOES NOT MEAN THE DETECTOR WORKS. Measured against real
+stand-up it scores F1 0.24 — see the warning in humor_mcp/audio_reactions.py.
+
+They are close to circular by construction: `speech()` is a pure harmonic stack
+(flatness 0.004) and `laughter()` is modulated noise (0.47), which is exactly
+the gap `detect()` looks for. Real recordings collapse it to 0.055 vs 0.058.
+
+What they still legitimately cover: the signal-processing does what it says on
+signals that DO separate, the framing/segmentation maths is right, audio loads
+and downmixes correctly, degenerate inputs do not crash, and the alignment of
+reactions to transcript lines — which is the part that is actually sound and is
+reused verbatim by the --reactions path.
 """
 import json, subprocess, sys, tempfile
 from pathlib import Path
@@ -204,6 +212,51 @@ with tempfile.TemporaryDirectory() as td:
         check(meta["detector"] == "audio" and "reaction_at" in meta,
               "provenance records that the anchor was measured, not typed")
         check(LINES[0] in rows[0]["context"], "context comes from the preceding cues")
+
+        # --reactions: a timeline from a real classifier, bypassing the detector
+        print("\na reaction timeline from a real classifier")
+        rj = td / "reactions.json"
+        want = [LINES[i] for i in sorted(LAUGH_AFTER)]
+        # times taken from the same synthetic layout, as an external tool would give
+        marks, t2 = [], 0.0
+        for i, text in enumerate(LINES):
+            t2 += 1.4 + 0.12 * len(text.split()) + 0.25
+            if i in LAUGH_AFTER:
+                marks.append({"start": round(t2, 2),
+                              "end": round(t2 + LAUGH_AFTER[i], 2),
+                              "kind": "laughter",
+                              "strength": round(0.3 + 0.2 * len(marks), 2)})
+                t2 += LAUGH_AFTER[i] + 0.25
+        rj.write_text(json.dumps(marks), encoding="utf-8")
+        r = subprocess.run([sys.executable, "-m", "humor_mcp.cli", "import-audio",
+                            "--id", "a-react", "--reactions", str(rj),
+                            "--transcript", str(sub), "--performer", "A. Comic",
+                            "--title", "Test set", "--i-own-this"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           timeout=300, env=IENV)
+        if r.returncode != 0:
+            print(r.stdout, r.stderr)
+        rows2 = [json.loads(l) for l in
+                 (PACKS / "a-react" / "lines.jsonl").read_text(encoding="utf-8").splitlines()
+                 if l.strip()]
+        check(r.returncode == 0, "imports with no audio file at all")
+        check([x["text"] for x in rows2] == want,
+              f"same punchlines as the audio path: {[x['text'] for x in rows2] == want}")
+        check([x["laugh"] for x in rows2] == [m["strength"] for m in marks],
+              "the classifier's strengths are carried through unchanged")
+        check("does not work" not in r.stdout and "F1 0.24" not in r.stdout,
+              "no detector warning on this path — the detector was not used")
+        shutil.rmtree(PACKS / "a-react", ignore_errors=True)
+
+        bad = td / "bad.json"
+        bad.write_text(json.dumps([{"kind": "laughter"}]), encoding="utf-8")
+        r = subprocess.run([sys.executable, "-m", "humor_mcp.cli", "import-audio",
+                            "--id", "a-bad", "--reactions", str(bad),
+                            "--transcript", str(sub), "--performer", "X"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           timeout=300, env=IENV)
+        check(r.returncode != 0 and "start" in (r.stdout + r.stderr),
+              "a reaction with no timestamp is rejected by name")
 
         # a transcript with no timings cannot be aligned and must say so
         flat = td / "s.txt"

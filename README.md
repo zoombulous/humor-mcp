@@ -176,15 +176,31 @@ humor-mcp import-audio --id tight-five --audio set.mp3 --transcript set.srt \
 humor-mcp build
 ```
 
-The audio supplies the reactions, the transcript supplies the words. The
-detector finds laughter and applause in the waveform — real timings, real
-durations, a strength that reflects how long the room actually went — and each
-reaction is anchored to the line that earned it.
+The audio supplies the reactions, the transcript supplies the words, and each
+reaction is anchored to the line that earned it. Needs a timestamped transcript
+(`.srt`, `.vtt`, Whisper `.json`); a plain `.txt` carries no timings and cannot
+be aligned.
 
-This is the strongest path because **it does not need the captioner to have
-typed `[laughter]`**. Auto-generated captions never do, and that is most of what
-people have. Needs a timestamped transcript (`.srt`, `.vtt`, Whisper `.json`);
-a plain `.txt` carries no timings and cannot be aligned.
+> ### ⚠️ The bundled detector does not work on real audience audio
+>
+> Measured against 14 minutes of real stand-up with per-line ground truth from
+> an AudioSet classifier: **F1 0.24** — precision 0.15, recall 0.54. It fired 93
+> times for 26 real laughs.
+>
+> The reason is not a bad threshold, it is that the features carry no signal
+> here. On that recording, median spectral flatness is **0.0582 for laughter and
+> 0.0549 for speech**; 4–8 Hz modulation is **0.3255 against 0.3246**. The best
+> single threshold on any of the three features scores exactly the
+> majority-class baseline — no threshold beats always guessing "speech".
+>
+> It scored well on synthetic signals only because those were built with the
+> property being tested: pure harmonic speech at flatness 0.004 against
+> noise-based laughter at 0.47. Real mic'd, compressed, reverberant room audio
+> collapses that two-order-of-magnitude gap to nothing.
+>
+> **Use a trained classifier instead.** `MIT/ast-finetuned-audioset-10-10-0.4593`
+> has laughter and applause classes and is what produced the ground truth above.
+> Feed its output in with `--reactions`, below.
 
 It does **not** transcribe. Nothing downloads a model or calls a service — bring
 a transcript from whatever you already use. Audio needs `numpy`, `scipy` and
