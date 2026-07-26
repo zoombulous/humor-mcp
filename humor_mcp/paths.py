@@ -17,7 +17,15 @@ Overrides:
   HUMOR_HOME    move your corpus somewhere other than ~/.humor-mcp
   HUMOR_PACKS   read packs from exactly these directories instead (os.pathsep
                 separated); the first is also where imports are written
-  HUMOR_DB      build/serve a database somewhere other than <repo>/humor.db
+  HUMOR_DB      build/serve a database somewhere other than ~/.humor-mcp/humor.db
+
+There is ONE database per HUMOR_HOME and every checkout shares it, but packs are
+read from whichever checkout you are standing in. So `build` from a second clone
+rewrites that one database from a different set of packs, and anything held only
+in the other checkout drops out of it. This is the practical reason your material
+belongs in ~/.humor-mcp/packs rather than <repo>/packs: it is read no matter
+where you build from, so no clone can quietly build a corpus without it. Set
+HUMOR_DB when you want a build that cannot touch your real one.
 """
 import os
 from pathlib import Path
