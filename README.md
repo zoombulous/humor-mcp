@@ -337,11 +337,12 @@ merged at all, since they carry different credit by definition.
 
 Two, as is normal for a repo that ships both software and data:
 
-- **The code** — `server.py`, `humor-mcp build`, `import_corpus.py`, `test_server.py` —
-  is MIT, © 2026 James Barker. See [LICENSE](LICENSE).
+- **The code** — the `humor_mcp` package and the test suites — is MIT,
+  © 2026 James Barker. See [LICENSE](LICENSE).
 - **The corpora** are licensed individually, per pack, in `packs/<id>/pack.json`.
-  They are not covered by the MIT licence and several may not be redistributed
-  at all. The `sources` tool prints the current state of all of them.
+  They are **not** covered by the MIT licence, two of them forbid commercial
+  use, and some may not be redistributed at all. See [NOTICE](NOTICE) for the
+  summary; the `sources` tool prints the live state of all of them.
 
 Owning something and licensing it are different: the `authors` field in each
 pack records who owns the material, and the `license` field records what

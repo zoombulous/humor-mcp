@@ -1,0 +1,25 @@
+humor-mcp
+Copyright (c) 2026 James Barker
+
+The MIT licence in LICENSE covers the SOFTWARE in this repository only — the
+humor_mcp package, server.py, and the test suites.
+
+IT DOES NOT COVER THE CORPORA under packs/. Those are licensed separately and
+individually. Each packs/<id>/pack.json declares its own authors and licence,
+and several of them are neither MIT nor freely redistributable. Run the
+`sources` tool, or read the manifest, before copying anything out of them.
+
+As shipped:
+
+  mallard   CC-BY-4.0        © James Barker
+  cup       CC-BY-NC-4.0     Sun et al., EMNLP 2022 — NON-COMMERCIAL ONLY
+  expun     CC-BY-NC-4.0     Sun et al., EMNLP 2022 — NON-COMMERCIAL ONLY
+  rjokes    CC-BY-4.0        Reddit r/Jokes posters, via SocialGrep
+  nycc      CC-BY-4.0        Hessel et al., ACL 2023
+
+Two of those forbid commercial use. Every result the server returns carries the
+licence of the line it came from, so the constraint travels with the material
+rather than living only here.
+
+`humor-mcp build --export DIR` copies out only the packs whose licence permits
+redistribution and writes a CREDITS.md covering exactly what went.

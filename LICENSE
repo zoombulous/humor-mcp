@@ -19,13 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This licence covers the SOFTWARE in this repository only — server.py, build.py,
-import_corpus.py, test_server.py and their documentation.
-
-The corpora under packs/ are licensed separately and individually. Each
-packs/<id>/pack.json declares its own authors and licence, and several of them
-are neither MIT nor redistributable. Run the `sources` tool, or read
-packs/<id>/pack.json, before you copy anything out of them.
