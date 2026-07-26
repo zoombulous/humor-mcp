@@ -82,8 +82,10 @@ _pack("unverified", {"title": "Licence not established", "authors": "Unknown",
       lines=[{"text": "Provenance for this line was never recorded.", "kind": "joke"}])
 
 FDB = FIXTURE / "humor.db"
-_b = subprocess.run([sys.executable, str(ROOT / "build.py")],
-                    cwd=FIXTURE, capture_output=True, text=True,
+# No cwd override: HUMOR_PACKS and HUMOR_DB are absolute, and running from
+# elsewhere would put `humor_mcp` off sys.path in a checkout with nothing installed.
+_b = subprocess.run([sys.executable, "-m", "humor_mcp.cli", "build"],
+                    capture_output=True, text=True,
                     encoding="utf-8", errors="replace", timeout=300,
                     env={**os.environ, "HUMOR_PACKS": str(FPACKS),
                          "HUMOR_DB": str(FDB)})
@@ -150,7 +152,7 @@ REQS = [
                 "arguments": {"limit": 5, "source": "locked"}}},
 ]
 
-p = subprocess.run([sys.executable, str(ROOT / "server.py")],
+p = subprocess.run([sys.executable, "-m", "humor_mcp.cli", "serve"],
                    input="\n".join(json.dumps(r) for r in REQS) + "\n",
                    capture_output=True, text=True, encoding="utf-8", timeout=120,
                    env=SERVER_ENV)
@@ -293,7 +295,7 @@ print("\nsql fragments are aliased, not string-patched")
 p = subprocess.run([sys.executable, "-c", """
 import sys
 sys.path.insert(0, r"%s")
-import server
+from humor_mcp import server
 frag_a, _ = server.src_filter(False, "mallard", False)
 frag_b, _ = server.src_filter(False, "mallard", False, alias="l")
 frag_c, _ = server.src_filter(False, None, False, alias="l")
@@ -310,7 +312,7 @@ check(".kind" not in out[3] and "kind IS NULL" in out[3],
       f"kind_clause unaliased: {out[3]}")
 check("l.kind IS NULL" in out[4] and "l.kind NOT IN" in out[4],
       f"kind_clause aliased on every mention: {out[4]}")
-src = (ROOT / "server.py").read_text(encoding="utf-8")
+src = (ROOT / "humor_mcp" / "server.py").read_text(encoding="utf-8")
 check(".replace('source_id'" not in src and '.replace("source_id"' not in src,
       "no string-patching of SQL left in the file")
 
@@ -328,7 +330,7 @@ print("\nschemas are derived from signatures, not maintained beside them")
 p = subprocess.run([sys.executable, "-c", """
 import inspect, json, sys
 sys.path.insert(0, r"%s")
-import server
+from humor_mcp import server
 bad = []
 for name, _desc, fn in server.TOOLS:
     props, required = server.param_schema(fn)

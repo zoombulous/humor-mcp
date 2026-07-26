@@ -29,14 +29,12 @@ WHY BOTH FILES
 import argparse, json, sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT))
-import paths
+from . import paths
 
-from _utf8 import force_utf8  # noqa: E402
+from ._utf8 import force_utf8  # noqa: E402
 force_utf8()
 
-import transcripts  # noqa: E402
+from . import transcripts  # noqa: E402
 
 
 def align(cues, events, ctx_n=2, lead=0.35, min_chars=12):
@@ -95,7 +93,7 @@ def main():
     a = ap.parse_args()
     PACKS = Path(a.packs_dir) if a.packs_dir else paths.import_target()
 
-    import audio_reactions as ar
+    from . import audio_reactions as ar
 
     audio = Path(a.audio)
     if not audio.exists():

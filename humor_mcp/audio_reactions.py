@@ -47,7 +47,7 @@ except ImportError as e:  # pragma: no cover - environment dependent
         "    pip install numpy scipy soundfile\n"
         "The rest of humor-mcp has no dependencies; only audio does.")
 
-from _utf8 import force_utf8
+from ._utf8 import force_utf8
 force_utf8()
 
 SR = 16000

@@ -19,3 +19,8 @@ ingest_mallard.py
 __pycache__/
 *.pyc
 share/
+
+# packaging
+build/
+dist/
+*.egg-info/

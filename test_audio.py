@@ -15,7 +15,7 @@ import soundfile as sf
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-from audio_reactions import detect, load, SR  # noqa: E402
+from humor_mcp.audio_reactions import detect, load, SR  # noqa: E402
 
 rng = np.random.default_rng(7)
 fails = []
@@ -128,7 +128,7 @@ with tempfile.TemporaryDirectory() as td:
           "48k stereo is downmixed and decimated to 16k mono")
     check(len(detect(y2)) == 1, "detection survives the conversion")
 
-    p = subprocess.run([sys.executable, str(ROOT / "audio_reactions.py"), str(wav)],
+    p = subprocess.run([sys.executable, "-m", "humor_mcp.cli", "reactions", str(wav)],
                        capture_output=True, text=True, encoding="utf-8", timeout=180)
     check(p.returncode == 0 and "laughter" in p.stdout, "CLI prints what it hears")
 
@@ -174,7 +174,7 @@ with tempfile.TemporaryDirectory() as td:
     IENV = {**os.environ, "HUMOR_PACKS": str(PACKS)}
 
     def imp(*extra, expect_ok=True):
-        p = subprocess.run([sys.executable, str(ROOT / "import_audio.py"),
+        p = subprocess.run([sys.executable, "-m", "humor_mcp.cli", "import-audio",
                             "--audio", str(wav), *extra],
                            capture_output=True, text=True, encoding="utf-8", timeout=300,
                            env=IENV)
@@ -216,7 +216,7 @@ with tempfile.TemporaryDirectory() as td:
     finally:
         shutil.rmtree(PACKS / "a-demo", ignore_errors=True)
         shutil.rmtree(PACKS / "a-nope", ignore_errors=True)
-        subprocess.run([sys.executable, str(ROOT / "build.py")], capture_output=True)
+        subprocess.run([sys.executable, "-m", "humor_mcp.cli", "build"], capture_output=True)
 
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)

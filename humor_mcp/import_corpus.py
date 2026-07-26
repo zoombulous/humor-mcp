@@ -17,11 +17,9 @@ unverified everywhere it surfaces and excluded from any export.
 import argparse, csv, json, sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT))
-import paths
+from . import paths
 
-from _utf8 import force_utf8
+from ._utf8 import force_utf8
 force_utf8()
 
 WELL_KNOWN_OPEN = {"CC0-1.0", "CC-BY-4.0", "MIT", "Apache-2.0", "PUBLIC-DOMAIN"}

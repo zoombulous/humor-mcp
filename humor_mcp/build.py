@@ -13,12 +13,10 @@ a lines.jsonl, and re-run. Nothing else needs to change.
 import argparse, json, os, shutil, sqlite3, sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-
-import paths                                    # noqa: E402
+from . import paths  # noqa: E402
 DB = paths.db_path()
 
-from _utf8 import force_utf8
+from ._utf8 import force_utf8
 force_utf8()
 
 # ---------------------------------------------------------------- pack model
@@ -263,6 +261,18 @@ def build(only=None):
     # already allows one writer alongside readers, so dropping and recreating
     # the tables needs no deletion at all.
     packs = read_all_packs(only)          # validates everything before touching the db
+    if not packs:
+        print("no packs found. Corpus directories searched:")
+        for d in paths.candidate_dirs():
+            print(f"  {d}" + ("" if d.is_dir() else "   [does not exist]"))
+        print(f"\nPut a pack in {paths.import_target()}, or import one:\n"
+              "  humor-mcp import-corpus --id my-sets --input jokes.txt \\\n"
+              '      --title "My jokes" --authors "Your Name" --license CC-BY-4.0')
+        return
+    # The database lives beside your corpus, which on a fresh install does not
+    # exist yet — without this, the first command anyone runs is an opaque
+    # "unable to open database file" from sqlite.
+    DB.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB)
     con.executescript(DROP)
     con.executescript(SCHEMA)
@@ -364,12 +374,22 @@ def export(dest):
     print(f"wrote {dest / 'CREDITS.md'}")
 
 
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--only", nargs="*")
-    ap.add_argument("--export", metavar="DIR")
+def main():
+    ap = argparse.ArgumentParser(
+        prog="humor-mcp build",
+        description="Compile packs into the corpus database.")
+    ap.add_argument("--only", nargs="*", metavar="ID",
+                    help="build just these pack ids")
+    ap.add_argument("--export", metavar="DIR",
+                    help="copy out only the packs whose licence permits it, "
+                         "with a CREDITS.md, instead of building")
     a = ap.parse_args()
     if a.export:
         export(a.export)
     else:
         build(set(a.only) if a.only else None)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

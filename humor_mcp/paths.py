@@ -22,10 +22,14 @@ Overrides:
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+PKG = Path(__file__).resolve().parent
 HOME = Path(os.environ.get("HUMOR_HOME") or (Path.home() / ".humor-mcp"))
 USER_PACKS = HOME / "packs"
-BUNDLED_PACKS = ROOT / "packs"
+# Sits beside the package in a checkout; absent once pip-installed, where the
+# package lands in site-packages and there is no repo to ship packs from. That
+# is the intended difference: `uvx humor-mcp` gives you the tool, and your
+# corpus is the one in HUMOR_HOME.
+BUNDLED_PACKS = PKG.parent / "packs"
 
 
 def _override():
@@ -35,12 +39,16 @@ def _override():
     return [Path(p) for p in raw.split(os.pathsep) if p.strip()]
 
 
+def candidate_dirs():
+    """Every directory that COULD hold packs, whether or not it exists — so an
+    error message can name the place you were expected to put something."""
+    ov = _override()
+    return ov if ov is not None else [BUNDLED_PACKS, USER_PACKS]
+
+
 def pack_dirs():
     """Directories to read packs from. Later entries win on an id collision."""
-    ov = _override()
-    if ov is not None:
-        return ov
-    return [d for d in (BUNDLED_PACKS, USER_PACKS) if d.is_dir()]
+    return [d for d in candidate_dirs() if d.is_dir()]
 
 
 def import_target():
@@ -50,4 +58,6 @@ def import_target():
 
 
 def db_path():
-    return Path(os.environ.get("HUMOR_DB") or (ROOT / "humor.db"))
+    """Built database. Lives with YOUR corpus, not with the code — site-packages
+    is not writable and a checkout should not accumulate build artefacts."""
+    return Path(os.environ.get("HUMOR_DB") or (HOME / "humor.db"))

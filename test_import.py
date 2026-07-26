@@ -20,8 +20,13 @@ def check(cond, label):
 ENV = {**os.environ, "HUMOR_PACKS": str(PACKS)}
 
 
+SUBCMD = {"build.py": "build", "import_corpus.py": "import-corpus",
+          "import_transcript.py": "import-transcript",
+          "import_audio.py": "import-audio"}
+
+
 def run(script, *args, expect_ok=True, env=None):
-    p = subprocess.run([sys.executable, str(ROOT / script), *args],
+    p = subprocess.run([sys.executable, "-m", "humor_mcp.cli", SUBCMD[script], *args],
                        capture_output=True, text=True, encoding="utf-8", timeout=180,
                        env=env or ENV)
     if expect_ok and p.returncode != 0:
@@ -155,7 +160,7 @@ He doesn't know that yet.
     print("\nregression: a colon mid-sentence is not a speaker label")
     import importlib
     sys.path.insert(0, str(ROOT))
-    it = importlib.import_module("import_transcript")
+    it = importlib.import_module("humor_mcp.import_transcript")
     for s in ["So I said: get out of my house.",
               "Here's the thing: nobody told me.",
               "My advice: never do that."]:
@@ -176,7 +181,7 @@ He doesn't know that yet.
           "square-bracket stage directions still stripped")
 
     print("\nregression: a caption that is only a number is content")
-    tr = importlib.import_module("transcripts")
+    tr = importlib.import_module("humor_mcp.transcripts")
     numsrt = write("num.srt", "1\n00:00:01,000 --> 00:00:03,000\n1995\n\n"
                               "2\n00:00:03,000 --> 00:00:05,000\nwas a good year.\n")
     cues = tr.read_srt_vtt(numsrt)
@@ -284,7 +289,7 @@ finally:
     for pid in created:
         shutil.rmtree(PACKS / pid, ignore_errors=True)
     shutil.rmtree(TMP, ignore_errors=True)
-    subprocess.run([sys.executable, str(ROOT / "build.py")], capture_output=True)
+    subprocess.run([sys.executable, "-m", "humor_mcp.cli", "build"], capture_output=True)
 
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)

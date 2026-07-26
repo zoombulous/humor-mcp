@@ -31,11 +31,9 @@ CREDIT
 import argparse, json, re, sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT))
-import paths
+from . import paths
 
-from _utf8 import force_utf8
+from ._utf8 import force_utf8
 force_utf8()
 
 # Reaction markers, strongest first. The weight is a heuristic stand-in for the
@@ -74,7 +72,7 @@ ABBREV = re.compile(r"\b(?:Mr|Mrs|Ms|Dr|St|Jr|Sr|vs|etc|Inc|Ltd)\.$", re.I)
 # ------------------------------------------------------------------- readers
 # Parsing lives in transcripts.py so the audio importer, which needs the
 # timings, and this one, which does not, cannot drift apart.
-import transcripts  # noqa: E402
+from . import transcripts  # noqa: E402
 
 
 def read_srt_vtt(p):

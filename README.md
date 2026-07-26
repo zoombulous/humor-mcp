@@ -11,39 +11,67 @@ exception: it needs `numpy`, `scipy` and `soundfile`, and is only imported when
 you actually use it.)
 
 ```
-packs/<id>/pack.json   who made this material, under what licence
-packs/<id>/lines.jsonl the lines
-packs/<id>/pairs.jsonl chosen/rejected preference pairs (optional)
-      build.py             packs/ -> humor.db  (SQLite + FTS5)
-      server.py            the MCP server (stdio, read-only)
-      import_audio.py      audio + timed transcript -> pack (measured reactions)
-      import_transcript.py transcript -> pack (text reaction markers)
-      import_corpus.py     jokes file -> pack
-      audio_reactions.py   the laughter/applause detector, usable on its own
-      transcripts.py       shared .srt/.vtt/.json parsing
-      paths.py             where the bundled and user corpora live
+packs/<id>/pack.json          who made this material, under what licence
+packs/<id>/lines.jsonl        the lines
+packs/<id>/pairs.jsonl        chosen/rejected preference pairs (optional)
+humor_mcp/cli.py              the one entry point; subcommands below
+          server.py           the MCP server (stdio, read-only)
+          build.py            packs -> humor.db  (SQLite + FTS5)
+          import_audio.py     audio + timed transcript (measured reactions)
+          import_transcript.py transcript (text reaction markers)
+          import_corpus.py    a jokes file
+          audio_reactions.py  the laughter/applause detector
+          transcripts.py      shared .srt/.vtt/.json parsing
+          paths.py            where the bundled and user corpora live
+server.py                     shim, so a checkout runs with nothing installed
 ```
 
 ## Install
 
-Needs Python 3.9+ and nothing else. There is no package to install — clone it
-and point your MCP client at `server.py`.
+Python 3.9+, no required dependencies. Two ways, depending on whether you want
+the bundled corpus.
+
+**Installed** — the tool only; bring your own corpus:
 
 ```bash
-git clone <this-repo> humor-mcp
+uvx humor-mcp where            # or: pip install humor-mcp
+claude mcp add humor -- uvx humor-mcp
+```
+
+**Cloned** — also gets the bundled packs, and needs nothing installed:
+
+```bash
+git clone https://github.com/zoombulous/humor-mcp
 cd humor-mcp
-python build.py                      # packs/ -> humor.db
+python -m humor_mcp.cli build
 claude mcp add humor -- python "$(pwd)/server.py"
 ```
 
 On Windows use the full path in place of `$(pwd)`. Any MCP client works; this
-speaks plain stdio JSON-RPC over stdin/stdout.
+speaks plain stdio JSON-RPC over stdin/stdout, and running the command with no
+arguments is what starts the server.
 
-Optional, for audio ingest only:
+Audio ingest is the one optional extra:
 
 ```bash
-pip install numpy scipy soundfile
+pip install "humor-mcp[audio]"     # or: pip install numpy scipy soundfile
 ```
+
+### Commands
+
+```
+humor-mcp                     serve on stdio   <- what an MCP client runs
+humor-mcp where               which corpus directories are in use
+humor-mcp build               compile packs -> humor.db
+humor-mcp build --export DIR  copy out only what may be redistributed
+humor-mcp import-corpus       a .txt/.csv/.jsonl of jokes
+humor-mcp import-transcript   a transcript
+humor-mcp import-audio        audio + a timed transcript
+humor-mcp reactions FILE      what the detector hears in a recording
+```
+
+From a clone with nothing installed, `python -m humor_mcp.cli ...` is the same
+thing.
 
 Check it:
 
@@ -61,9 +89,15 @@ regardless of which packs you have.
 There are two pack directories, and the second one is yours:
 
 ```
-<checkout>/packs        the packs that ship with this repo
+<checkout>/packs        the packs that ship with this repo (clone only)
 ~/.humor-mcp/packs      YOUR corpus  <- imports go here by default
+~/.humor-mcp/humor.db   the built database
 ```
+
+If you pip-installed rather than cloned, the first of those does not exist and
+your corpus is the only one — the wheel deliberately carries no packs, since
+they are ~9 MB of other people's material and two of those packs are
+non-commercial.
 
 Both are read and merged at build time, so your material is searchable next to
 the bundled packs without ever being mixed into the checkout. It survives
@@ -71,10 +105,10 @@ the bundled packs without ever being mixed into the checkout. It survives
 conflict over a joke file.
 
 ```bash
-python import_corpus.py --id my-sets --input jokes.txt \
+humor-mcp import-corpus --id my-sets --input jokes.txt \
     --title "My tight five" --authors "Your Name" --license CC-BY-4.0
 # -> ~/.humor-mcp/packs/my-sets
-python build.py
+humor-mcp build
 ```
 
 If a pack of yours claims the same `id` as a bundled one, yours wins and the
@@ -117,10 +151,10 @@ should not be able to flood it.
 ### From audio + a transcript (best)
 
 ```bash
-python audio_reactions.py set.mp3          # what does it hear? look first
-python import_audio.py --id tight-five --audio set.mp3 --transcript set.srt \
+humor-mcp reactions set.mp3          # what does it hear? look first
+humor-mcp import-audio --id tight-five --audio set.mp3 --transcript set.srt \
     --performer "Your Name" --title "Comedy Cellar, March" --i-own-this
-python build.py
+humor-mcp build
 ```
 
 The audio supplies the reactions, the transcript supplies the words. The
@@ -148,7 +182,7 @@ mic'd and the room is not, so real applause runs about 3 dB above speech and any
 volume threshold finds either everything or nothing.
 
 It is a heuristic detector, not a trained model. Music, a noisy room, or a comic
-laughing into their own mic will fool it. Run `audio_reactions.py` on your file
+laughing into their own mic will fool it. Run `humor-mcp reactions` on your file
 and read the flatness values before trusting it; `--flat-speech-max` is the knob.
 
 ### From a transcript
@@ -156,9 +190,9 @@ and read the flatness values before trusting it; `--flat-speech-max` is the knob
 The usual case — you have a recording of a set, not a tidy file of jokes:
 
 ```bash
-python import_transcript.py --id tight-five --input set.srt \
+humor-mcp import-transcript --id tight-five --input set.srt \
     --performer "Your Name" --title "Comedy Cellar, March" --i-own-this
-python build.py
+humor-mcp build
 ```
 
 `.srt`, `.vtt`, Whisper `.json` and plain `.txt` all work, with or without
@@ -187,9 +221,9 @@ CC-BY-4.0, or set `--license` explicitly.
 If you already have jokes in a file:
 
 ```bash
-python import_corpus.py --id my-sets --input jokes.txt \
+humor-mcp import-corpus --id my-sets --input jokes.txt \
     --title "My tight five" --authors "Your Name" --license CC-BY-4.0
-python build.py
+humor-mcp build
 ```
 
 `.txt` (blank-line separated), `.csv` (a `text`/`line`/`joke` column, optionally
@@ -207,13 +241,13 @@ hand — that is the whole contract:
 
 ## The pack model
 
-`packs/*/pack.json` is a declarative model and `build.py` is its compiler, so the
+`packs/*/pack.json` is a declarative model and `humor-mcp build` is its compiler, so the
 model is checked before anything is built — every field has a declared type with
 a value predicate, and a bad manifest fails at author time with **all** its
 problems listed at once, not one per rebuild.
 
 ```
-$ python build.py
+$ humor-mcp build
 6 problem(s) in the corpus model — nothing was built:
   - packs/zz/pack.json: unknown field 'redistributible' — did you mean 'redistributable'?
   - packs/zz/pack.json: 'redistributable' must be a real boolean — true/false, not "true"/"false", got 'false'
@@ -240,7 +274,7 @@ one and not the other; an undocumented parameter raises at import.
 ## Sharing a corpus
 
 ```bash
-python build.py --export ./share
+humor-mcp build --export ./share
 ```
 
 Copies out only the packs whose licence actually permits it, and writes a
@@ -264,7 +298,7 @@ non-commercial**, and the credit attached to every result will tell you so.
 
 The author's own local corpus also holds a `standup` pack of transcribed
 crowd work, which is **not** in this repo: its licence does not permit
-redistribution, so `.gitignore` keeps it out and `build.py --export` refuses it.
+redistribution, so `.gitignore` keeps it out and `humor-mcp build --export` refuses it.
 That asymmetry is the point of the tool — the same rules that hide it from you
 hide your restricted material from everyone else.
 
@@ -303,7 +337,7 @@ merged at all, since they carry different credit by definition.
 
 Two, as is normal for a repo that ships both software and data:
 
-- **The code** — `server.py`, `build.py`, `import_corpus.py`, `test_server.py` —
+- **The code** — `server.py`, `humor-mcp build`, `import_corpus.py`, `test_server.py` —
   is MIT, © 2026 James Barker. See [LICENSE](LICENSE).
 - **The corpora** are licensed individually, per pack, in `packs/<id>/pack.json`.
   They are not covered by the MIT licence and several may not be redistributed
