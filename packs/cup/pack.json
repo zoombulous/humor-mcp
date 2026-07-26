@@ -1,0 +1,16 @@
+{
+  "id": "cup",
+  "title": "CUP: Context-Situated Pun dataset",
+  "authors": "Jiao Sun, Anjali Narayan-Chen, Shereen Oraby, Shuyang Gao, Tagyoung Chung, Jing Huang, Yang Liu, Nanyun Peng (Amazon)",
+  "url": "https://arxiv.org/abs/2210.13522",
+  "license": "CC-BY-NC-4.0",
+  "citation": "Sun et al. 2022. Context-Situated Pun Generation. EMNLP 2022.\nBuilt on SemEval-2017 Task 7 (Miller et al. 2017), also CC-BY-NC.",
+  "redistributable": true,
+  "commercial_use": false,
+  "attribution_required": true,
+  "license_verified": true,
+  "note": "CC-BY-NC-4.0 permits redistribution WITH attribution, NON-COMMERCIALLY only. Cite both CUP and the underlying SemEval-2017 Task 7 dataset.",
+  "files": [
+    "lines.jsonl"
+  ]
+}

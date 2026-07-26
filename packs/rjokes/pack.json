@@ -1,0 +1,18 @@
+{
+  "id": "rjokes",
+  "title": "Reddit r/Jokes preference pairs",
+  "authors": "Reddit r/Jokes posters; dataset packaging by SocialGrep",
+  "url": "https://huggingface.co/datasets/SocialGrep/one-million-reddit-jokes",
+  "license": "CC-BY-4.0",
+  "citation": "SocialGrep, one-million-reddit-jokes (CC-BY-4.0).",
+  "redistributable": true,
+  "commercial_use": true,
+  "attribution_required": true,
+  "license_verified": true,
+  "default_hidden": true,
+  "hidden_reason": "Excluded from DPO v6: humor-aligned but off-rubric for Mallard's 'thoughtful spoken peer' voice — it caused the v5 regression. Kept as a contrast set, not as training signal.",
+  "note": "Derived by pairing high-upvote vs low-upvote posts. CC-BY-4.0 covers SocialGrep's compilation; individual Reddit posters retain rights in their own submissions and no per-author credit was captured at ingest. Much of r/Jokes is recycled folk material with no identifiable author.",
+  "files": [
+    "pairs.jsonl"
+  ]
+}

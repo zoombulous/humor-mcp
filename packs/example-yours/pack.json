@@ -1,0 +1,16 @@
+{
+  "id": "example-yours",
+  "title": "Example: bring your own jokes",
+  "authors": "you",
+  "url": "",
+  "license": "CC-BY-4.0",
+  "citation": "",
+  "redistributable": true,
+  "commercial_use": true,
+  "attribution_required": true,
+  "license_verified": true,
+  "note": "Template pack. Delete it or replace it with your own material.",
+  "files": [
+    "lines.jsonl"
+  ]
+}

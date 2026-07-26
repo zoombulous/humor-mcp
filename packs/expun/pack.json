@@ -1,0 +1,16 @@
+{
+  "id": "expun",
+  "title": "ExPUNations: puns augmented with keywords and explanations",
+  "authors": "Jiao Sun, Anjali Narayan-Chen, Shereen Oraby, Alessandra Cervone, Tagyoung Chung, Jing Huang, Yang Liu, Nanyun Peng (Amazon)",
+  "url": "https://github.com/amazon-science/expunations",
+  "license": "CC-BY-NC-4.0",
+  "citation": "Sun et al. 2022. ExPUNations: Augmenting Puns with Keywords and Explanations. EMNLP 2022.",
+  "redistributable": true,
+  "commercial_use": false,
+  "attribution_required": true,
+  "license_verified": true,
+  "note": "CC-BY-NC-4.0: redistribution allowed with attribution, non-commercial only.",
+  "files": [
+    "lines.jsonl"
+  ]
+}

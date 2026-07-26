@@ -1,0 +1,18 @@
+{
+  "id": "nycc",
+  "title": "New Yorker Caption Contest preference pairs",
+  "authors": "Jack Hessel et al.; captions by New Yorker contest entrants",
+  "url": "https://huggingface.co/datasets/jmhessel/newyorker_caption_contest",
+  "license": "CC-BY-4.0",
+  "citation": "Hessel et al. 2023. Do Androids Laugh at Electric Sheep? Humor \"Understanding\" Benchmarks from The New Yorker Caption Contest. ACL 2023.",
+  "redistributable": true,
+  "commercial_use": true,
+  "attribution_required": true,
+  "license_verified": true,
+  "default_hidden": true,
+  "hidden_reason": "Excluded from DPO v6: humor-aligned but off-rubric for Mallard's 'thoughtful spoken peer' voice — it caused the v5 regression. Kept as a contrast set, not as training signal.",
+  "note": "Only TEXT is held here — the winning caption, a losing caption and a written description of the cartoon. The cartoons themselves are Condé Nast copyright and are not in this corpus, so their terms do not apply to it.",
+  "files": [
+    "pairs.jsonl"
+  ]
+}

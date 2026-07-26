@@ -1,0 +1,21 @@
+# built artefact
+humor.db
+humor.db-wal
+humor.db-shm
+
+# raw dump from the source database — disposable once ingested
+_raw/
+
+# Packs that may not be redistributed — not even the manifest, since a pack
+# that is always empty for everyone else is just confusing output. rjokes and
+# nycc were listed here while their licences were unverified; both are confirmed
+# CC-BY-4.0 and the exporter ships them, so tracking them is correct.
+packs/standup/
+
+# One-time private migration: reads a Postgres export that is not in this repo,
+# so it can only fail for anyone who clones this.
+ingest_mallard.py
+
+__pycache__/
+*.pyc
+share/
