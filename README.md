@@ -1,9 +1,21 @@
 # humor-mcp
 
-An MCP server over a local humor corpus. Every line it returns says who wrote it.
+**An MCP server over a local humor corpus. Every line it returns says who wrote it.**
 
-No database server, no network, no dependencies — Python stdlib and one SQLite
-file. It runs the same whether or not the machine that built the corpus is
+[![PyPI](https://img.shields.io/pypi/v/humor-mcp?color=2b7489)](https://pypi.org/project/humor-mcp/)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Corpora](https://img.shields.io/badge/corpora-licensed%20per%20pack-orange)](NOTICE)
+
+Point a model at a body of jokes and it will happily launder them: you get the
+material back with no idea whose it was, whether you may publish it, or whether
+you may sell it. This server treats that as the primary problem. Every result
+carries the credit for the line it came from, material that may not be
+redistributed is withheld unless you ask for it by name, and the exporter
+refuses to hand out anything whose licence does not permit it.
+
+No database server, no network, no required dependencies — Python stdlib and one
+SQLite file. It runs the same whether or not the machine that built the corpus is
 awake.
 
 (That holds for the server and every text path. Audio ingest is the one
