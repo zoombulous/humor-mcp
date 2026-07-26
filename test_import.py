@@ -275,7 +275,12 @@ He doesn't know that yet.
 
     print("\nregression: rebuild works while a reader holds the db open")
     import sqlite3
-    held = sqlite3.connect(f"file:{ROOT / 'humor.db'}?mode=ro", uri=True)
+    # Ask the code where the database is rather than assuming the repo root —
+    # it moved to the corpus home when the package became installable.
+    from humor_mcp import paths as _paths
+    db_file = _paths.db_path()
+    run("build.py")                       # make sure it exists before opening it
+    held = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
     held.execute("SELECT count(*) FROM lines").fetchone()
     try:
         r = run("build.py")
