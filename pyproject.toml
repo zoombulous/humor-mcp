@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "humor-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "An MCP server over a local humor corpus that credits every line it returns"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -35,7 +35,13 @@ humor-mcp = "humor_mcp.cli:main"
 [tool.setuptools]
 packages = ["humor_mcp"]
 
-# The bundled corpus deliberately does NOT ship in the wheel: it is ~9 MB of
-# other people's material, two packs of it non-commercial. `uvx humor-mcp` gives
-# you the tool and reads the corpus in HUMOR_HOME; clone the repo if you want
-# the bundled packs too.
+# The author's own pack ships INSIDE the wheel, so `uvx humor-mcp` arrives
+# working: a corpus, 975 human ratings and the best-of-N picks, with nothing to
+# download and nothing to wire together. It is CC-BY-4.0 and commercially
+# usable, which is what makes it safe to bundle.
+#
+# The third-party packs deliberately do NOT ship: ~7 MB of other people's
+# material, and cup/expun are CC-BY-NC, which would quietly saddle every
+# installer with a non-commercial restriction. Clone the repo for those.
+[tool.setuptools.package-data]
+humor_mcp = ["packs/*/*.json", "packs/*/*.jsonl"]

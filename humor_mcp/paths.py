@@ -33,10 +33,14 @@ from pathlib import Path
 PKG = Path(__file__).resolve().parent
 HOME = Path(os.environ.get("HUMOR_HOME") or (Path.home() / ".humor-mcp"))
 USER_PACKS = HOME / "packs"
-# Sits beside the package in a checkout; absent once pip-installed, where the
-# package lands in site-packages and there is no repo to ship packs from. That
-# is the intended difference: `uvx humor-mcp` gives you the tool, and your
-# corpus is the one in HUMOR_HOME.
+# INSIDE the package, so it travels in the wheel: `pip install humor-mcp` or
+# `uvx humor-mcp` arrives with a working corpus and needs no download, no build
+# step and nothing to wire up. Only the author's own CC-BY-4.0 pack lives here —
+# it carries every human rating and every best-of-N pick, and it may be used
+# commercially, which the third-party packs below may not.
+SHIPPED_PACKS = PKG / "packs"
+# Beside the package in a checkout; absent once pip-installed. The third-party
+# packs are big and two of them are non-commercial, so they stay clone-only.
 BUNDLED_PACKS = PKG.parent / "packs"
 
 
@@ -51,7 +55,7 @@ def candidate_dirs():
     """Every directory that COULD hold packs, whether or not it exists — so an
     error message can name the place you were expected to put something."""
     ov = _override()
-    return ov if ov is not None else [BUNDLED_PACKS, USER_PACKS]
+    return ov if ov is not None else [SHIPPED_PACKS, BUNDLED_PACKS, USER_PACKS]
 
 
 def pack_dirs():

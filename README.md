@@ -40,24 +40,26 @@ server.py                     shim, so a checkout runs with nothing installed
 
 ## Install
 
-Python 3.9+, no required dependencies. Two ways, depending on whether you want
-the bundled corpus.
-
-**Installed** — the tool only; bring your own corpus:
+Python 3.9+, no required dependencies. One line:
 
 ```bash
-uvx humor-mcp where            # or: pip install humor-mcp
 claude mcp add humor -- uvx humor-mcp
 ```
 
-No account or checkout needed; `uvx` fetches it from PyPI. To run the unreleased
-tip instead, point uvx at the repo:
+That is the whole install. **A corpus ships inside the package** — 1,248 lines
+with 975 human ratings and the best-of-N picks — so there is nothing to
+download, no build step, and nothing to wire together. The first launch
+compiles the database itself; your client just starts working. No account, no
+checkout.
+
+To run the unreleased tip instead:
 
 ```bash
 uvx --from git+https://github.com/zoombulous/humor-mcp humor-mcp
 ```
 
-**Cloned** — also gets the bundled packs, and needs nothing installed:
+**Cloned** — adds the third-party packs (CUP, ExPUNations, r/Jokes, New Yorker),
+which are too large and too non-commercial to bundle:
 
 ```bash
 git clone https://github.com/zoombulous/humor-mcp
@@ -325,7 +327,7 @@ non-commercial**, and the credit attached to every result will tell you so.
 
 | pack | lines / pairs | licence | |
 |---|---|---|---|
-| `mallard` | 1,248 + 463 | CC-BY-4.0 | © James Barker — engine output plus his own ratings, h2h picks and eval verdicts |
+| `mallard` | 1,248 + 463 | CC-BY-4.0 | © James Barker — engine output plus his own ratings, h2h picks and eval verdicts. **Ships inside the wheel too**, so `pip install` gets it |
 | `cup` | 2,753 | CC-BY-NC-4.0 | Context-Situated Pun dataset, Sun et al., EMNLP 2022 |
 | `expun` | 1,899 | CC-BY-NC-4.0 | ExPUNations, Sun et al., EMNLP 2022 |
 | `rjokes` | 4,000 pairs | CC-BY-4.0 | Reddit r/Jokes via SocialGrep. *Off-rubric — hidden by default.* |

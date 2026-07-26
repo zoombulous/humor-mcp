@@ -51,11 +51,41 @@ def _where():
     print(f"database      {db}" + ("" if db.exists() else "  [not built yet]"))
 
 
+def _autobuild():
+    """Compile the corpus on first launch, so installing is the whole install.
+
+    An MCP client's first contact with this program is `exec humor-mcp` — there
+    is no earlier moment in which to run a setup step, and a client that gets an
+    error instead of a handshake just reports the server as broken. Since the
+    wheel now carries a corpus, "no database yet" is a first run rather than a
+    misconfiguration, and the honest response is to build it.
+
+    Deliberately quiet and deliberately non-fatal: stdout belongs to JSON-RPC and
+    must not be polluted, and a build that fails should still leave the server to
+    start and explain itself properly rather than dying here.
+    """
+    from . import paths
+    if paths.db_path().exists():
+        return
+    try:
+        from .build import build
+        _out = sys.stdout
+        sys.stdout = sys.stderr          # keep the protocol channel clean
+        try:
+            build()
+        finally:
+            sys.stdout = _out
+    except Exception as e:               # noqa: BLE001 - never block the handshake
+        print(f"humor-mcp: first-run build failed ({e}); serving anyway",
+              file=sys.stderr)
+
+
 def main(argv=None):
     force_utf8()
     argv = list(sys.argv[1:] if argv is None else argv)
 
     if not argv or argv[0] in ("serve", "server"):
+        _autobuild()
         from .server import main as serve
         return serve()
     cmd = argv[0]
