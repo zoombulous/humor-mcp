@@ -337,14 +337,21 @@ p = subprocess.run([sys.executable, "-c", """
 import sys
 sys.path.insert(0, r"%s")
 from humor_mcp import server
-frag_a, _ = server.src_filter(False, "mallard", False)
-frag_b, _ = server.src_filter(False, "mallard", False, alias="l")
+frag_a, _ = server.src_filter(False, "own", False)
+frag_b, _ = server.src_filter(False, "own", False, alias="l")
 frag_c, _ = server.src_filter(False, None, False, alias="l")
 kc_a, _ = server.kind_clause(None)
 kc_b, _ = server.kind_clause(None, alias="l")
 print(repr(frag_a)); print(repr(frag_b)); print(repr(frag_c))
 print(repr(kc_a)); print(repr(kc_b))
-""" % ROOT], capture_output=True, text=True, encoding="utf-8", timeout=120)
+""" % ROOT], capture_output=True, text=True, encoding="utf-8", timeout=120,
+                   # src_filter now consults the db (unknown packs must be loud),
+                   # so this probe must see the FIXTURE corpus: without HUMOR_DB
+                   # it reads whatever ~/.humor-mcp holds — absent on a clean
+                   # clone (suite crashes), private on the author's machine
+                   # (suite silently depends on it). The pack is "own" for the
+                   # same reason: it exists in the fixture, not just locally.
+                   env={**os.environ, "HUMOR_DB": str(FDB)})
 out = p.stdout.splitlines()
 check(out[0] == "'source_id = ?'", f"unaliased stays bare: {out[0]}")
 check(out[1] == "'l.source_id = ?'", f"alias qualifies it: {out[1]}")
@@ -397,7 +404,10 @@ check(lines_out[0] == "[]", f"every tool's schema matches its signature: {lines_
 check(lines_out[1] == "RAISED", "an undocumented parameter fails loudly at import")
 defs = resp[2]["result"]["tools"]
 bd = [t for t in defs if t["name"] == "breakdown"][0]
-check(bd["inputSchema"].get("required") == ["query"],
+# breakdown.query grew a default when "empty = browse by score" became true of
+# it (it was the one required parameter anywhere); requiredness must follow the
+# signature down as well as up.
+check(bd["inputSchema"].get("required") is None,
       f"requiredness derived from the signature: {bd['inputSchema'].get('required')}")
 sh = [t for t in defs if t["name"] == "search_humor"][0]["inputSchema"]["properties"]
 check(sh["limit"]["type"] == "integer" and sh["limit"]["default"] == 10,

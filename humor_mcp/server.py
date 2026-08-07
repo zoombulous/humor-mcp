@@ -149,6 +149,11 @@ def src_filter(include_restricted, source, include_hidden=False, alias=None):
     col = f"{alias}.source_id" if alias else "source_id"
     where, params = [], []
     if source:
+        # A typo'd pack silently returning count:0 reads as "no data exists",
+        # which sends the caller away wrong. Unknown must be loud.
+        known = [r["id"] for r in db().execute("SELECT id FROM sources").fetchall()]
+        if source not in known:
+            raise ValueError(f"unknown pack {source!r}; loaded: {', '.join(sorted(known))}")
         where.append(f"{col} = ?")
         params.append(source)
         return " AND ".join(where), params
@@ -182,18 +187,59 @@ def t_search(query="", source=None, kind=None, min_score=None, limit=10,
         extra.append("whole_line(l.text) = 1")
     extra_sql = (" AND " + " AND ".join(extra)) if extra else ""
 
+    note = None
     if m:
         sql = (f"SELECT l.* FROM lines_fts f JOIN lines l ON l.id = f.rowid "
                f"WHERE lines_fts MATCH ? AND {sf}"
                f"{extra_sql} ORDER BY bm25(lines_fts) LIMIT ?")
         args = [m] + params + ex + [limit]
     else:
-        sql = (f"SELECT l.* FROM lines l WHERE {sf}"
-               f"{extra_sql} ORDER BY l.score DESC NULLS LAST, l.id LIMIT ?")
-        args = params + ex + [limit]
+        # Browse mode ranks by score, and the word lexicon's 0-5 scale would
+        # put single words above every actual joke — the same collision
+        # top_rated already guards against. A query is fine (bm25 ranks, and
+        # searching "therapy" should find the word); ranking is not. The
+        # exclusion (and its hint) applies only when word rows are actually in
+        # reach: a hint about material that does not exist is a wild-goose
+        # chase, and this corpus may be somebody else's, without a lexicon.
+        kc, kp = ("", [])
+        if not kind and db().execute(
+                f"SELECT 1 FROM lines l WHERE {sf} AND l.kind='word' LIMIT 1",
+                params).fetchone():
+            kc, kp = kind_clause(None, alias="l")
+            note = WORD_HINT
+        sql = (f"SELECT l.* FROM lines l WHERE {sf}{extra_sql}{kc} "
+               f"ORDER BY l.score DESC NULLS LAST, l.id LIMIT ?")
+        args = params + ex + kp + [limit]
     rows = db().execute(sql, args).fetchall()
-    return capped({"count": len(rows), "results": [row_out(r) for r in rows]},
-                  was_capped, asked)
+    res = {"count": len(rows), "results": [row_out(r) for r in rows]}
+    if not rows:
+        # An empty result has more than one cause, and they call for opposite
+        # moves (rewrite the query vs relax a filter vs name kind='word').
+        # Blaming the wrong one sends the caller away — separate them, the way
+        # rating_note does for top_rated.
+        if m and ex:
+            base = db().execute(
+                f"SELECT count(*) c FROM lines_fts f JOIN lines l ON l.id = f.rowid "
+                f"WHERE lines_fts MATCH ? AND {sf}", [m] + params).fetchone()["c"]
+            res["note"] = (
+                f"The query matches {base} line(s), but the "
+                f"kind/min_score/whole_lines filters excluded them all — relax "
+                f"the filters, not the query." if base else
+                "The query matched nothing — the corpus holds material, this "
+                "search just found none of it.")
+        elif m:
+            res["note"] = ("The query matched nothing — the corpus holds "
+                           "material, this search just found none of it.")
+        elif note:
+            res["note"] = ("Nothing matches these filters except single-word "
+                           "lexicon entries, which rank on a different 0-5 "
+                           "scale and are excluded here; pass kind='word' "
+                           "for those.")
+        else:
+            res["note"] = "Nothing matches these filters."
+    elif note:
+        res["note"] = note
+    return capped(res, was_capped, asked)
 
 
 # Scoring scales differ by kind: jokes are rated 0-3, the funny-word lexicon 0-5.
@@ -289,18 +335,41 @@ def t_taste_profile(rater=None, n=12, kind=None, include_restricted=False,
     }
 
 
-def t_breakdown(query, limit=5, include_restricted=False, include_hidden=False):
-    m = fts_query(query)
-    limit, _ = clamp(limit, 5)
+def t_breakdown(query="", limit=5, include_restricted=False, include_hidden=False):
+    asked, m = limit, fts_query(query)
+    limit, was_capped = clamp(limit, 5)
     sf, params = src_filter(include_restricted, None, include_hidden, alias="l")
-    if not m:
-        return {"count": 0, "results": []}
-    rows = db().execute(
-        f"SELECT l.* FROM lines_fts f JOIN lines l ON l.id=f.rowid "
-        f"WHERE lines_fts MATCH ? AND {sf} "
-        f"AND l.breakdown IS NOT NULL AND l.breakdown != '' "
-        f"ORDER BY bm25(lines_fts) LIMIT ?", [m] + params + [limit]).fetchall()
-    return {"count": len(rows), "results": [row_out(r) for r in rows]}
+    if (query or "").strip() and not m:
+        # "?!?" or an emoji strips to zero tokens. Browsing HERE would present
+        # the top-scored breakdowns as if they matched a query they have
+        # nothing to do with — browse is for an empty query, asked for as such.
+        return {"count": 0, "results": [],
+                "note": "the query contains no searchable words (punctuation "
+                        "and symbols are stripped); pass an empty query to "
+                        "browse by score"}
+    if m:
+        rows = db().execute(
+            f"SELECT l.* FROM lines_fts f JOIN lines l ON l.id=f.rowid "
+            f"WHERE lines_fts MATCH ? AND {sf} "
+            f"AND l.breakdown IS NOT NULL AND l.breakdown != '' "
+            f"ORDER BY bm25(lines_fts) LIMIT ?", [m] + params + [limit]).fetchall()
+    else:
+        # The parameter doc has always promised "empty = browse by score";
+        # until now an empty query returned a bare count:0, which reads as
+        # "no breakdowns exist" — the opposite of what browsing should say.
+        # Score ranking brings the same word-lexicon scale collision browse
+        # has in t_search, so the same exclusion applies.
+        kc, kp = kind_clause(None, alias="l")
+        rows = db().execute(
+            f"SELECT l.* FROM lines l WHERE {sf}{kc} "
+            f"AND l.breakdown IS NOT NULL AND l.breakdown != '' "
+            f"ORDER BY l.score DESC NULLS LAST, l.id LIMIT ?",
+            params + kp + [limit]).fetchall()
+    res = {"count": len(rows), "results": [row_out(r) for r in rows]}
+    if not rows:
+        res["note"] = ("No line matching this query carries a breakdown." if m
+                       else "No line in reach carries a breakdown.")
+    return capped(res, was_capped, asked)
 
 
 def t_pairs(query=None, source=None, limit=10, include_restricted=False,
@@ -486,12 +555,17 @@ def t_stats():
 # they agreed, so every new argument was a two-place edit that could silently
 # drift. Anything in a signature but missing here fails at import.
 PARAM_DOC = {
-    "query": "words to search for; empty = browse by score",
+    "query": ("words to search for; empty = browse (by score — except "
+              "preference_pairs, which returns a fresh random sample)"),
     "source": "restrict to one pack id — naming a pack overrides both gates below",
+    # Fallback only — the advertised schema lists the kinds actually loaded
+    # (see kind_doc); a static enum here once promised kinds with zero rows,
+    # and an agent that filtered on one read the empty result as "no data".
     "kind": "joke / pun / candidate / slate_winner / eval / utterance / word",
     "min_score": "only lines a human scored at least this highly",
-    "whole_lines": ("drop transcript offcuts that start or stop mid-sentence; "
-                    "heuristic, and strict about a final full stop"),
+    "whole_lines": ("drop transcript offcuts that start or stop mid-sentence: "
+                    "keeps lines that open with a capital, digit or quote AND "
+                    "end in terminal punctuation (.!?…\"')] etc.); heuristic"),
     "limit": "how many results (capped at %d)" % MAX_LIMIT,
     "n": "how many examples per side (capped at %d)" % MAX_LIMIT,
     "rater": "restrict to one rater's judgements",
@@ -514,7 +588,8 @@ TOOLS = [
      t_taste_profile),
 
     ("breakdown", "Structural breakdowns (mechanism, setup/turn, technique) for lines "
-     "matching a query — how the joke is built, not just the text.", t_breakdown),
+     "matching a query — how the joke is built, not just the text. An empty query "
+     "browses the top-scored breakdowns.", t_breakdown),
 
     ("preference_pairs", "Chosen vs rejected pairs — what won head-to-head and what "
      "lost. Off-rubric packs are withheld by default and reported in `withheld`.",
@@ -536,6 +611,24 @@ HANDLERS = {name: fn for name, _, fn in TOOLS}
 JSON_TYPE = {bool: "boolean", int: "integer", float: "number", str: "string"}
 
 
+def kind_doc():
+    """Advertise the kinds this corpus actually holds, not a hopeful enum.
+
+    Reach matters as much as existence: a kind that lives only in a restricted
+    or hidden pack is invisible to a default query, and advertising it would
+    recreate the very failure this function exists to fix — an agent filters
+    on the promised kind, gets count:0, and concludes there is no data.
+    """
+    try:
+        sf, params = src_filter(False, None, False)
+        kinds = [r["kind"] for r in db().execute(
+            f"SELECT DISTINCT kind FROM lines WHERE {sf} AND kind IS NOT NULL "
+            f"ORDER BY kind", params)]
+        return " / ".join(kinds) if kinds else PARAM_DOC["kind"]
+    except Exception:                     # no db yet: fall back, never fail listing
+        return PARAM_DOC["kind"]
+
+
 def param_schema(fn):
     """JSON Schema properties + required list, derived from the signature."""
     props, required = {}, []
@@ -545,7 +638,7 @@ def param_schema(fn):
                 f"{fn.__name__}({name}=...) has no entry in PARAM_DOC. Every tool "
                 "parameter must be documented — that is what keeps the advertised "
                 "schema and the implementation from drifting.")
-        spec = {"description": PARAM_DOC[name]}
+        spec = {"description": kind_doc() if name == "kind" else PARAM_DOC[name]}
         if prm.default is inspect.Parameter.empty:
             required.append(name)
             spec["type"] = "string"
