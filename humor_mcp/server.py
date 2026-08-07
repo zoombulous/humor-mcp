@@ -49,7 +49,15 @@ def db():
         if not DB_PATH.exists():
             raise RuntimeError(
                 f"no corpus at {DB_PATH}. Run `python build.py` first, or set HUMOR_DB.")
-        _con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        # check_same_thread=False: sqlite's guard is about which thread USES a
+        # connection, not about concurrency. Over stdio there is one thread, so
+        # it never mattered; over HTTP each request runs on its own worker and
+        # the lazily-created connection would belong to whichever one arrived
+        # first. Both transports serialize all access (stdio by nature,
+        # http_server under one dispatch lock), which is the property the
+        # guard exists to enforce.
+        _con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True,
+                               check_same_thread=False)
         _con.row_factory = sqlite3.Row
         _con.create_function("whole_line", 1, whole_line, deterministic=True)
     return _con

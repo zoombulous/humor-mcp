@@ -3,6 +3,7 @@
 Single entry point.
 
     humor-mcp                     run the MCP server on stdio  <- what a client invokes
+    humor-mcp serve-http          run it over Streamable HTTP for remote clients
     humor-mcp build               compile packs -> humor.db
     humor-mcp build --export DIR  copy out only what may be redistributed
     humor-mcp import-corpus ...   a .txt/.csv/.jsonl of jokes
@@ -88,6 +89,10 @@ def main(argv=None):
         _autobuild()
         from .server import main as serve
         return serve()
+    if argv[0] == "serve-http":
+        _autobuild()
+        from .http_server import main as serve_http
+        return serve_http(argv[1:])
     cmd = argv[0]
     if cmd in ("-h", "--help", "help"):
         _usage()
