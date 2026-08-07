@@ -9,7 +9,7 @@
   "commercial_use": true,
   "attribution_required": true,
   "license_verified": true,
-  "note": "Copyright James Barker. Released under CC-BY-4.0: use it for anything, including commercially, with attribution. The lines are Mallard engine output; the ratings, head-to-head picks and eval verdicts are his own curation, which is the part worth citing.",
+  "note": "Copyright James Barker. Released under CC-BY-4.0: use it for anything, including commercially, with attribution. The lines are Mallard engine output; the ratings and head-to-head picks are his own curation, which is the part worth citing.",
   "files": [
     "lines.jsonl",
     "pairs.jsonl"

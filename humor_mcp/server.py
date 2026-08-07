@@ -574,8 +574,9 @@ def handle(req):
     m = req.get("method")
     if m == "initialize":
         pv = (req.get("params") or {}).get("protocolVersion") or "2024-11-05"
+        from . import __version__
         return {"protocolVersion": pv, "capabilities": {"tools": {}},
-                "serverInfo": {"name": "humor-mcp", "version": "0.1.0"}}
+                "serverInfo": {"name": "humor-mcp", "version": __version__}}
     if m == "tools/list":
         return {"tools": tool_defs()}
     if m == "tools/call":
