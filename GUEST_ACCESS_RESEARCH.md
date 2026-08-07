@@ -2,7 +2,18 @@
 
 Research digest (2026-08-07), commissioned for the public "mallard humor corpus" demo:
 guest access + abuse limits for an MCP that strangers add to their own Claude.
-Read before building the public endpoint.
+
+**STATUS RECONCILIATION — the endpoint is ALREADY LIVE** at
+`https://humor.barker-ai.net/mcp` (authless by James's call, mallard pack only,
+`humor-mcp.service` :8526; a parallel session shipped it, scrubbed the pack, and
+released 0.1.3). This digest therefore reads as the HARDENING DELTA, not a launch
+plan. §1 independently re-confirms authless was the right call. Still actionable:
+the **global token bucket** (the real box protector — per-IP lumps claude.ai's
+shared-egress guests together), **optional bearer-key tiers** for elevated limits,
+the **Cloudflare rate rule + pre-staged disabled kill rule**, the **systemd
+hardening/quota checklist** (verify the live unit against §4), and the **journald
+access-line + daily rollup** (§5). The $-cap idea is moot: verified no tool can
+reach a paid upstream.
 
 **Code verification first:** the serving path is clean. `humor_mcp/server.py` is
 stdlib-only (json/re/sqlite3), opens the DB read-only (`mode=ro`, line 59), and no
