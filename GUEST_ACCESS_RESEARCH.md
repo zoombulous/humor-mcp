@@ -3,6 +3,14 @@
 Research digest (2026-08-07), commissioned for the public "mallard humor corpus" demo:
 guest access + abuse limits for an MCP that strangers add to their own Claude.
 
+**✅ SHIPPED 2026-08-08 — the box-side delta is built, deployed and verified.**
+Everything below that lives in code or systemd is done: global bucket, bearer-key
+tiers, the per-`tools/call` access line, the daily rollup, and the unit's resource
+caps. What remains is **Cloudflare only** (the rate rule and the pre-staged
+disabled kill rule, §2/§4) — those need James's dashboard. See "WHAT SHIPPED"
+at the foot of this file for the built article, including two places the build
+knowingly departs from the recommendation below.
+
 **STATUS RECONCILIATION — the endpoint is ALREADY LIVE** at
 `https://humor.barker-ai.net/mcp` (authless by James's call, mallard pack only,
 `humor-mcp.service` :8526; a parallel session shipped it, scrubbed the pack, and
@@ -195,3 +203,86 @@ Cloudflare rules, ~1h end-to-end verification adding it to a real claude.ai acco
 [Glama hosting](https://glama.ai/mcp/hosting) ·
 [Zuplo on MCP rate limits](https://zuplo.com/blog/never-ship-mcp-server-without-rate-limit) ·
 [Trend Micro exposed-MCP research](https://www.trendmicro.com/vinfo/us/security/news/vulnerabilities-and-exploits/update-on-exposed-mcp-servers-the-threat-widens-to-the-cloud)
+
+---
+
+## WHAT SHIPPED (2026-08-08)
+
+Built against the recommendation above, deployed to `humor-mcp.service` :8526, and
+verified over public HTTPS. Two deliberate departures are marked ⚠.
+
+**`humor_mcp/http_server.py`**
+
+- **Global token bucket**, 600/min burst 100, checked in `do_POST`. Over-limit is
+  **503 + Retry-After: 5**, not 429: 429 tells a caller *it* asked too much, which
+  would be a lie when the box is simply busy with everyone else. The global bucket
+  is deliberately kept OUT of the `_buckets` dict, because that dict is cleared
+  wholesale at 10k entries — an attacker cycling source addresses could otherwise
+  force the eviction and hand itself a full reset of the box's own budget.
+- **Client bucket is charged BEFORE the global one**, so a hammering caller is
+  turned away at its own limit without spending from the budget everyone shares.
+- **Bearer keys**, `HUMOR_HTTP_KEYS=<file>`, `key_id:secret[:rate[:burst]]` per
+  line, `#` comments. Default 240/min burst 60. The file is re-read when its mtime
+  changes (checked at most every 5s), so handing someone a key needs no restart —
+  a restart would drop every connection in flight. An unknown key is served exactly
+  as anonymous: **never 401**. The file is absent by default and its absence is not
+  an error.
+- **Access line, one per MCP request**:
+  `<ip> mcp key=<id> rpc=<methods> tool=<names> status=<code> ms=<n>`. Tool *names*
+  only — arguments can carry a guest's own prompt context and are never written
+  down. The stdlib's own request line is suppressed for these so there is exactly
+  one line per call, and 429/503 get a line too so throttling is countable.
+- ⚠ **Per-IP limits were NOT lowered to 60/20; they stay at 120/40.** §2 recommends
+  both "lower the current 120/40" and "per-IP limits as a coarse anti-hammer layer
+  (generous)" — those pull against each other, and the shared-egress finding settles
+  it: hosted Claude clients arrive from a handful of Anthropic addresses, so one
+  per-IP bucket covers many unrelated guests and tightening it throttles strangers
+  for someone else's traffic. Observed peak is ~80 requests per IP per *day*, three
+  orders off the limit. The global bucket is the protector; per-IP stays generous.
+- **`do_HEAD`** added — GET's status and headers, no body. The stdlib answered HEAD
+  with a 501 error page, which reads as a broken endpoint to link-preview bots and
+  uptime checkers.
+- **Idle keep-alive reaps no longer log as errors.** `BaseHTTPRequestHandler` reports
+  the socket timeout as `Request timed out`, and on a keep-alive connection that is
+  just the client having finished — every such line landed exactly `timeout` seconds
+  after a perfectly good response, 30 of them in two days, drowning any real one. A
+  connection that never sent a request at all still logs, because that one is worth
+  seeing. `HUMOR_HTTP_IDLE_TIMEOUT` (default 30) makes it testable.
+
+**`humor-mcp.service`** — containment per §4, measured footprint being ~7 MB RSS and
+1 task at rest: `MemoryMax=256M`, `CPUQuota=25%`, `TasksMax=128`, `Nice=10`, plus
+`ProtectSystem=full`, `ProtectControlGroups`, `RestrictSUIDSGID`, `RestrictRealtime`,
+`RestrictNamespaces`, `LockPersonality`, `SystemCallArchitectures=native` alongside
+the existing `NoNewPrivileges`/`PrivateTmp`.
+
+⚠ **`PrivateDevices`, `ProtectKernelModules` and `ProtectKernelTunables` cannot be
+used here.** This is a *user* unit, and an unprivileged manager cannot modify the
+capability bounding set, which all three imply. Adding them makes systemd fail the
+start with **218/CAPABILITIES**, and `Restart=always` turns that into a crash loop —
+which is exactly what happened on the first deploy attempt, taking the live endpoint
+down until the unit was rolled back. Confirmed by `systemd-run --user` probe: the set
+above starts clean, those three fail. Do not re-add them unless this unit moves to
+the system manager. (`cpu memory pids` are delegated to the user slice, so the
+resource caps do take effect — verified in `systemctl --user show`.)
+
+**`~/bin/humor-rollup`** — what the demo was asked, over any window (default 24h):
+request count, distinct IPs, p50/p95/max latency, status breakdown with 429/503
+called out, counts by tool and by key, busiest callers. Never query text. Cron
+`5 8 * * *` appends to `~/.mallard/humor-rollup.log`. It parses the new access line
+only, so it reports nothing from before this deploy.
+
+**Tests** — `test_http.py` grew from 16 checks to 26, all passing, plus the other
+three suites and a cold clean-clone build under an empty `HUMOR_HOME`. New coverage:
+global bucket exhaustion returns 503 while per-client is wide open; a keyed caller
+gets its own larger bucket; an unknown key is anonymous and never 401/403; the access
+line names the tool and contains neither the query text nor the key; exactly one log
+line per request; a keep-alive idle reap logs nothing while a silent connection does;
+HEAD on `/mcp` and `/healthz`.
+
+**Still open — Cloudflare, needs the dashboard (James):**
+1. Rate rule (the 1 free one): 30 req/10s per IP on the `/mcp` path → block 10s.
+2. WAF custom rule "block URI path starts with `/mcp`", left **disabled** — the
+   one-toggle edge kill switch. The box-side switch is
+   `systemctl --user stop humor-mcp`.
+3. Leave Bot Fight Mode OFF (§2 — it would challenge MCP clients and cannot be
+   skipped by a WAF rule on free).

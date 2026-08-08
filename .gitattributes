@@ -1,0 +1,6 @@
+# Every file here is text, and this repo deploys to a Linux box by scp straight
+# from the working copy. The Windows checkout runs core.autocrlf=true, so the
+# next git operation to touch these files would rewrite them with CRLF and the
+# next deploy would ship CRLF to a systemd unit and a Python module — a failure
+# that reads as anything except line endings. Pin the working copy to LF.
+* text=auto eol=lf

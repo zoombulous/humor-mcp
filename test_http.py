@@ -44,12 +44,15 @@ def free_port():
     return p
 
 
-def start(extra_env):
+def start(extra_env, log=None):
+    """log=<path> captures the server's stderr, which is the access log."""
     port = free_port()
+    sink = open(log, "wb") if log else subprocess.DEVNULL
     proc = subprocess.Popen(
         [sys.executable, "-m", "humor_mcp.cli", "serve-http", "--port", str(port)],
-        cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        env={**os.environ, "HUMOR_DB": str(FDB), **extra_env})
+        cwd=ROOT, stdout=subprocess.DEVNULL, stderr=sink,
+        env={**os.environ, "HUMOR_DB": str(FDB),
+             "PYTHONUNBUFFERED": "1", **extra_env})
     deadline = time.time() + 15
     while time.time() < deadline:
         try:
@@ -61,15 +64,17 @@ def start(extra_env):
     raise SystemExit("server did not come up")
 
 
-def http(port, path="/mcp", data=None, method=None):
+def http(port, path="/mcp", data=None, method=None, headers=None):
     """(status, parsed-or-raw-body). urllib raises on >=400; we want the code."""
+    h = {"Content-Type": "application/json",
+         "Accept": "application/json, text/event-stream"}
+    h.update(headers or {})
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         data=None if data is None else json.dumps(data).encode()
              if not isinstance(data, bytes) else data,
         method=method or ("POST" if data is not None else "GET"),
-        headers={"Content-Type": "application/json",
-                 "Accept": "application/json, text/event-stream"})
+        headers=h)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             raw = r.read()
@@ -154,6 +159,19 @@ try:
     c, r = http(port, data=b'{"pad":"' + b"x" * 70000 + b'"}')
     check(c == 413, "oversize body -> 413")
 
+    print("HEAD (link previews and uptime checks)")
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/mcp", method="HEAD",
+                                 headers={"Accept": "text/html"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        c, body, ctype = resp.status, resp.read(), resp.headers.get("Content-Type")
+        clen = resp.headers.get("Content-Length")
+    check(c == 200 and body == b"" and "text/plain" in (ctype or "")
+          and (clen or "0") != "0",
+          f"HEAD /mcp -> 200, no body, GET's headers (was 501; got {c}/{clen})")
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/healthz", method="HEAD")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        check(resp.status == 200 and resp.read() == b"", "HEAD /healthz -> 200")
+
     print("concurrency (the thread-bound-sqlite regression)")
     results = []
     def hammer():
@@ -169,7 +187,7 @@ try:
 finally:
     proc.kill()
 
-print("rate limit")
+print("rate limit (per client)")
 proc, port = start({"HUMOR_HTTP_RATE": "0", "HUMOR_HTTP_BURST": "3"})
 try:
     codes = [http(port, data={"jsonrpc": "2.0", "id": 1, "method": "ping"})[0]
@@ -178,6 +196,104 @@ try:
           f"burst of 3 then 429s (got {codes})")
 finally:
     proc.kill()
+
+print("rate limit (global — the box's own bucket)")
+proc, port = start({"HUMOR_HTTP_GLOBAL_RATE": "0", "HUMOR_HTTP_GLOBAL_BURST": "2"})
+try:
+    codes = [http(port, data={"jsonrpc": "2.0", "id": 1, "method": "ping"})[0]
+             for _ in range(4)]
+    check(codes[:2] == [200, 200] and codes[2:] == [503, 503],
+          f"global burst of 2, then 503 while per-client is wide open (got {codes})")
+finally:
+    proc.kill()
+
+print("bearer keys buy headroom, never admission")
+KEYFILE = FIXTURE / "keys.txt"
+KEYFILE.write_text(
+    "# id:secret:rate:burst\n"
+    "friend:s3cret:600:5\n"
+    "bad-line-no-secret\n"
+    "\n", encoding="utf-8")
+proc, port = start({"HUMOR_HTTP_RATE": "0", "HUMOR_HTTP_BURST": "1",
+                    "HUMOR_HTTP_KEYS": str(KEYFILE)})
+try:
+    ping = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+    anon = [http(port, data=ping)[0] for _ in range(3)]
+    check(anon == [200, 429, 429], f"anonymous gets the tight bucket (got {anon})")
+    keyed = [http(port, data=ping,
+                  headers={"Authorization": "Bearer s3cret"})[0] for _ in range(4)]
+    check(keyed == [200, 200, 200, 200],
+          f"a keyed caller has its own, larger bucket (got {keyed})")
+    c, _ = http(port, data=ping, headers={"Authorization": "Bearer wrong"})
+    check(c == 429, f"an unknown key is anonymous, not 401 (got {c})")
+    # The anon bucket was already spent above, so 429 IS the anonymous answer
+    # here; what matters is that it is never 401/403.
+    check(c not in (401, 403), "an unknown key is never rejected outright")
+finally:
+    proc.kill()
+
+print("access log: one line per call, tool named, arguments never")
+LOG = FIXTURE / "access.log"
+proc, port = start({"HUMOR_HTTP_KEYS": str(KEYFILE)}, log=str(LOG))
+try:
+    SECRET_QUERY = "zzsecretqueryzz"
+    http(port, data={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                     "params": {"name": "search_humor",
+                                "arguments": {"query": SECRET_QUERY}}})
+    http(port, data={"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                     "params": {"name": "corpus_stats", "arguments": {}}},
+         headers={"Authorization": "Bearer s3cret"})
+    time.sleep(0.5)
+finally:
+    proc.kill()
+text = LOG.read_text(encoding="utf-8", errors="replace")
+lines = [l for l in text.splitlines() if " mcp " in l]
+check(any("tool=search_humor" in l and "key=anon" in l and "status=200" in l
+          and "ms=" in l for l in lines),
+      "anonymous tools/call logs tool, key, status and duration")
+check(any("tool=corpus_stats" in l and "key=friend" in l for l in lines),
+      "a keyed call logs its key id, not its secret")
+check(SECRET_QUERY not in text and "s3cret" not in text,
+      "neither the query text nor the key itself reaches the log")
+check(len(lines) == 2 and not any('"POST /mcp' in l for l in text.splitlines()),
+      f"exactly one line per MCP request, no duplicate default line ({len(lines)})")
+
+print("idle keep-alive reaps are not errors; a silent connection is")
+LOG2 = FIXTURE / "idle.log"
+proc, port = start({"HUMOR_HTTP_IDLE_TIMEOUT": "1"}, log=str(LOG2))
+try:
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}).encode()
+    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    s.sendall(b"POST /mcp HTTP/1.1\r\nHost: x\r\n"
+              b"Content-Type: application/json\r\nContent-Length: "
+              + str(len(body)).encode() + b"\r\n\r\n" + body)
+    got = s.recv(4096)
+    time.sleep(2.5)                       # let the 1s idle timeout fire
+    s.close()
+    time.sleep(0.3)
+    after_keepalive = LOG2.read_text(encoding="utf-8", errors="replace")
+    check(b"200 OK" in got, "keep-alive request answered")
+    check("Request timed out" not in after_keepalive,
+          "a client that asked and went quiet logs no error")
+
+    quiet = socket.create_connection(("127.0.0.1", port), timeout=5)
+    time.sleep(2.5)                       # connect, say nothing at all
+    quiet.close()
+    time.sleep(0.3)
+finally:
+    proc.kill()
+tail = LOG2.read_text(encoding="utf-8", errors="replace")[len(after_keepalive):]
+# Assert on a real log LINE, not the substring: `self.headers` does not exist
+# until a request has been parsed, so dereferencing it here used to raise
+# inside socketserver and print a traceback whose source lines contain this
+# very string — which is how the first version of this check passed while the
+# behaviour was broken.
+timeout_lines = [l for l in tail.splitlines()
+                 if l.strip().startswith("127.0.0.1") and "Request timed out" in l]
+check(bool(timeout_lines),
+      "a connection that never sent a request logs one clean line, with its IP")
+check("Traceback" not in tail and "AttributeError" not in tail,
+      "and logs it without a traceback (headers do not exist that early)")
 
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)
