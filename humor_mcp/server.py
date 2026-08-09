@@ -516,6 +516,8 @@ def t_pairs(query=None, source=None, limit=10, include_restricted=False,
     for r in rows:
         p = {"id": r["id"], "prompt": r["prompt"], "chosen": r["chosen"],
              "rejected": r["rejected"], "source": r["source_id"]}
+        if "template" in r.keys() and r["template"]:
+            p["template"] = r["template"]
         # Nothing joined pairs to lines before, so a caller could not reach the
         # rating or the breakdown behind either side of a preference. Resolve
         # by exact text, and only when it is unambiguous — a text appearing
@@ -526,10 +528,6 @@ def t_pairs(query=None, source=None, limit=10, include_restricted=False,
                 "AND origin_id IS NULL LIMIT 2", (r[side], r["source_id"])).fetchall()
             if len(hit) == 1:
                 p[f"{side}_id"] = hit[0]["id"]
-        # The pack stores a template slug here (`mundane_complaint`), not the
-        # setup text — a consumer reading it as a prompt gets a category name.
-        if r["prompt"] and " " not in (r["prompt"] or "") and "_" in r["prompt"]:
-            p["prompt_is_template_slug"] = True
         out.append(p)
     res = counted({"results": out,
                    "order": "match order" if query else "random sample"},

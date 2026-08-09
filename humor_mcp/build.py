@@ -162,6 +162,9 @@ CREATE TABLE IF NOT EXISTS lines (
   -- at 2.0 and only 4 reach 3.0. Recording the batch is what makes an existing
   -- score readable as the within-batch ranking it always was. Derived, never
   -- asked of the rater.
+  -- What the pack shipped, kept whenever a correction changed the text, so a
+  -- repair is always visible and reversible rather than a silent edit.
+  original_text TEXT,
   slate_id INTEGER,
   -- winner | fail | control. Derived too: a seeded helpful non-answer scores 0
   -- with fit 0, a joke that genuinely missed scores 0 with fit above 0. Both
@@ -185,7 +188,11 @@ CREATE TABLE IF NOT EXISTS pairs (
   rejected TEXT NOT NULL,
   weight REAL,
   attribution TEXT,
-  meta TEXT
+  meta TEXT,
+  -- The category slug the batch was generated under (`mundane_complaint`).
+  -- It used to sit in `prompt`, where a consumer reading it as the setup got a
+  -- category name instead of the thing being joked about.
+  template TEXT
 );
 CREATE INDEX IF NOT EXISTS pairs_src ON pairs(source_id);
 
@@ -245,6 +252,98 @@ def link_duplicates(con):
         n_groups += 1
         n_rows += len(dupes)
     return n_groups, n_rows
+
+
+def apply_corrections(con, pack_dir, source_id):
+    """Apply a pack's `corrections.jsonl` to its lines and pairs.
+
+    Surface defects are worth repairing because they travel: three of the seven
+    in the mallard pack sit in lines `style_pack` hands out as the register to
+    imitate, and one is the CHOSEN side of a preference pair — so "perpet
+    perpetual" was being held up as the better answer.
+
+    A correction file rather than an edit to lines.jsonl, because the pack is
+    regenerated from its source database and an in-place fix would be silently
+    undone on the next ingest. Matching is on exact substring, so one entry
+    repairs the canonical row, its linked duplicate and any pair carrying the
+    same line. The original is kept in `original_text`; nothing is rewritten
+    without leaving the previous text on the row.
+
+    ⚠ Deliberately NOT a spell-checker. It applies exactly what the file says
+    and reports anything that matched nothing, because a correction that has
+    stopped matching means the material moved underneath it.
+    """
+    f = pack_dir / "corrections.jsonl"
+    if not f.exists():
+        return 0, 0, []
+    rules = []
+    for r in jsonl(f):
+        if r.get("_comment") or not r.get("find"):
+            continue
+        rules.append((r["find"], r.get("replace", ""), r.get("why", "")))
+    if not rules:
+        return 0, 0, []
+
+    n_lines = n_pairs = 0
+    stale = []
+    for find, repl, _why in rules:
+        hit = False
+        rows = con.execute(
+            "SELECT id, text FROM lines WHERE source_id=? AND instr(text, ?) > 0",
+            (source_id, find)).fetchall()
+        for rid, text in rows:
+            con.execute(
+                "UPDATE lines SET original_text=coalesce(original_text, text), "
+                "text=? WHERE id=?", (text.replace(find, repl), rid))
+            n_lines += 1
+            hit = True
+        for col in ("chosen", "rejected"):
+            prs = con.execute(
+                f"SELECT id, {col} FROM pairs WHERE source_id=? AND instr({col}, ?) > 0",
+                (source_id, find)).fetchall()
+            for pid, val in prs:
+                con.execute(f"UPDATE pairs SET {col}=? WHERE id=?",
+                            (val.replace(find, repl), pid))
+                n_pairs += 1
+                hit = True
+        if not hit:
+            stale.append(find)
+    return n_lines, n_pairs, stale
+
+
+def recover_pair_setups(con):
+    """Move the category slug out of `prompt` and put the real setup back.
+
+    Pairs stored a template slug — `mundane_complaint`, `iv-deadpan_setup` —
+    in the field named `prompt`, so anything reading `prompt` as the setup got
+    a category name and could not reconstruct what was being joked about. The
+    setup was never lost, only unlinked: a pair's chosen line usually exists as
+    a line row, and that row carries its context. 55 of the mallard pack's 57
+    pairs resolve that way, turning `mundane_complaint` back into "Stepped on a
+    Lego at 6am. Again."
+
+    A slug is recognised as a single token with no spaces; anything that
+    already reads as a sentence is left where it is, because another pack may
+    legitimately store real prompt text there.
+    """
+    moved = recovered = 0
+    for pid, prompt, chosen, src in con.execute(
+            "SELECT id, coalesce(prompt,''), chosen, source_id FROM pairs").fetchall():
+        looks_like_slug = prompt and " " not in prompt
+        if looks_like_slug:
+            con.execute("UPDATE pairs SET template=?, prompt=NULL WHERE id=?",
+                        (prompt, pid))
+            moved += 1
+        # Only from an unambiguous match: two lines with the same text would
+        # make the setup a guess.
+        ctx = con.execute(
+            "SELECT DISTINCT trim(coalesce(context,'')) FROM lines "
+            "WHERE source_id=? AND text=? AND trim(coalesce(context,'')) != ''",
+            (src, chosen)).fetchall()
+        if len(ctx) == 1 and (looks_like_slug or not prompt):
+            con.execute("UPDATE pairs SET prompt=? WHERE id=?", (ctx[0][0], pid))
+            recovered += 1
+    return moved, recovered
 
 
 def mark_slates_and_class(con):
@@ -478,6 +577,17 @@ def build(only=None):
                         f"VALUES ({','.join('?' * len(PAIR_COLS))})",
                         [r.get(c) for c in PAIR_COLS])
             np += 1
+        # Before link_duplicates, which groups by exact text: a repair applied
+        # afterwards would split a pair that should have been linked.
+        cl, cp, stale = apply_corrections(con, d, meta["id"])
+        if cl or cp:
+            print(f"  {'corrected':10s} {cl} line(s) and {cp} pair side(s) in "
+                  f"{meta['id']} (originals kept in original_text)")
+        for s in stale:
+            print(f"  ⚠ correction for {meta['id']} matched nothing: {s!r} — the "
+                  f"material moved; check it before trusting the rest",
+                  file=sys.stderr)
+
         flag = "" if meta["license_verified"] else "  [license UNVERIFIED]"
         if meta["default_hidden"]:
             flag += "  [hidden by default]"
@@ -491,6 +601,11 @@ def build(only=None):
     if dup_groups:
         print(f"  {'linked':10s} {dup_rows} row(s) in {dup_groups} duplicate "
               f"group(s) point at a canonical copy (ranked reads show each once)")
+
+    moved, recovered = recover_pair_setups(con)
+    if moved or recovered:
+        print(f"  {'pairs':10s} {moved} category slug(s) moved to `template`; "
+              f"{recovered} real setup(s) recovered into `prompt`")
 
     n_slates, n_slated, n_ctrl, n_fail = mark_slates_and_class(con)
     if n_slates:

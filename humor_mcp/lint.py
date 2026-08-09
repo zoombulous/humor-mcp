@@ -57,6 +57,72 @@ def findings(text):
     return out
 
 
+# Ordinary connective English. A phrase built only from these is a collocation
+# every writer uses ("at this point", "i'm pretty sure"), not a borrowed move.
+STOPWORDS = {
+    "a", "about", "after", "all", "am", "an", "and", "another", "any", "are",
+    "as", "at", "back", "be", "been", "before", "being", "but", "by", "can",
+    "could", "did", "do", "does", "doing", "done", "down", "each", "even",
+    "ever", "every", "for", "from", "get", "gets", "getting", "go", "going",
+    "got", "had", "has", "have", "he", "her", "here", "hers", "him", "his",
+    "how", "i", "if", "in", "into", "is", "it", "its", "just", "like", "make",
+    "makes", "me", "more", "most", "much", "my", "never", "no", "not", "now",
+    "of", "off", "on", "one", "only", "or", "our", "out", "over", "own", "re",
+    "s", "said", "same", "say", "says", "she", "should", "so", "some", "still",
+    "such", "sure", "t", "than", "that", "the", "their", "them", "then",
+    "there", "these", "they", "thing", "things", "think", "this", "those",
+    "through", "to", "too", "up", "us", "very", "was", "way", "we", "well",
+    "were", "what", "when", "where", "which", "while", "who", "why", "will",
+    "with", "would", "you", "your", "ll", "ve", "m", "d", "am",
+}
+
+
+def _content(words):
+    return [w for w in words if w not in STOPWORDS]
+
+
+def stock_phrases(rows, min_words=2, max_words=6, min_uses=2):
+    """Phrases this corpus reuses across unrelated setups.
+
+    The review's example is "chose violence" — an off-the-shelf meme phrase
+    that turns up in a rated line AND verbatim in a different slate's setup.
+    That is worth flagging because a stock phrase is borrowed shape rather than
+    written shape, and a model told to imitate the register will happily reach
+    for it.
+
+    ⚠ This is a REPORT, not a verdict, and deliberately not a schema column.
+    Reuse across setups is evidence of a stock phrase; it is not proof, and a
+    callback inside one batch is a device rather than a crutch — so phrases are
+    only counted once per setup and need to appear under two different ones.
+    """
+    seen = {}
+    for ctx, text in rows:
+        words = re.findall(r"[a-z']+", (text or "").lower())
+        here = set()
+        for n in range(min_words, max_words + 1):
+            for i in range(len(words) - n + 1):
+                span = words[i:i + n]
+                # A borrowed move carries its own images. Require the phrase to
+                # be mostly content words and to start and end on one, which is
+                # what separates "chose violence" from "and now i".
+                if len(_content(span)) < 2 or span[0] in STOPWORDS \
+                        or span[-1] in STOPWORDS:
+                    continue
+                here.add(" ".join(span))
+        for ph in here:
+            seen.setdefault(ph, set()).add(ctx or "")
+    out = [(ph, len(ctxs)) for ph, ctxs in seen.items() if len(ctxs) >= min_uses]
+    # Keep the longest phrasing of each overlapping family, so "and chose
+    # violence anyway" does not report three times as its own substrings.
+    out.sort(key=lambda t: (-len(t[0]), -t[1]))
+    kept = []
+    for ph, n in out:
+        if not any(ph in longer for longer, _ in kept):
+            kept.append((ph, n))
+    kept.sort(key=lambda t: (-t[1], -len(t[0])))
+    return kept
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="humor-mcp lint", description=__doc__,
@@ -65,6 +131,12 @@ def main(argv=None):
                     help="only lines scored at least this highly (exemplar risk)")
     ap.add_argument("--source", default=None, help="restrict to one pack id")
     ap.add_argument("--db", default=None, help="database path (default: the usual)")
+    ap.add_argument("--stock", action="store_true",
+                    help="EXPERIMENTAL: list phrasing reused across setups. It "
+                         "does find real borrowings, but cannot yet rank them — "
+                         "the known example ('chose violence') lands 295th of "
+                         "850, so it needs rarity weighting before it is worth "
+                         "reading by default")
     args = ap.parse_args(argv)
 
     import sqlite3
@@ -105,9 +177,26 @@ def main(argv=None):
                 print(f"  pair {r['id']:>6}  {r['source_id']:<10} {mark:<10} "
                       f"{kind:<12} {conf:<12} {frag!r}")
 
+    stock = []
+    if args.stock:
+        print("reused phrasing (candidate stock phrases)")
+        rows = [(r["context"], r["text"]) for r in con.execute(
+            f"SELECT context, text FROM lines WHERE {w}", params)]
+        rows += [(r["context"], r["context"]) for r in con.execute(
+            f"SELECT DISTINCT context FROM lines WHERE {w} "
+            f"AND context IS NOT NULL AND trim(context) != ''", params)]
+        stock = stock_phrases(rows)
+        for ph, n in stock[:15]:
+            print(f"  {n} setups  {ph!r}")
+        if not stock:
+            print("  (none reused across two or more setups)")
+
     print()
     print(f"{hits} finding(s), {likely} likely and {hits - likely} possibly "
           f"rhetorical ('Knock knock' is the joke, not a typo).")
+    if args.stock:
+        print(f"{len(stock)} phrase(s) reused across setups — evidence of borrowed "
+              f"shape, not a verdict, and not yet ranked usefully.")
     print("Nothing was changed — the wording is the corpus owner's to judge.")
     return 1 if likely else 0
 

@@ -1,0 +1,8 @@
+{"_comment": "Surface repairs applied at build time. Each entry fixes a generation artefact — a truncated word followed by its completion, or a doubled word — NOT a wording choice. The rater's judgement and every score are untouched; the original is kept on the row as original_text. This file exists rather than an edit to lines.jsonl because the pack is regenerated from Postgres by ingest_mallard.py, which would silently undo an in-place fix. Matching is on exact text, so one entry repairs the canonical row, its linked duplicate and any preference pair carrying the same line."}
+{"find": "quaran-trends were were a thing", "replace": "quaran-trends were a thing", "why": "doubled word"}
+{"find": "going to do with its life life.", "replace": "going to do with its life.", "why": "doubled word"}
+{"find": "life is a perpet perpetual photo op", "replace": "life is a perpetual photo op", "why": "truncated word then its completion"}
+{"find": "vending machine phras phrases", "replace": "vending machine phrases", "why": "truncated word then its completion"}
+{"find": "that extra pag page came from", "replace": "that extra page came from", "why": "truncated word then its completion"}
+{"find": "the movie that never happen happened", "replace": "the movie that never happened", "why": "truncated word then its completion"}
+{"find": "squirrel's hoardi hoarding habits", "replace": "squirrel's hoarding habits", "why": "truncated word then its completion"}
