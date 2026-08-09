@@ -608,6 +608,30 @@ try:
 except ValueError as e:
     check("available" in str(e), "an unknown kind errors and lists the real ones")
 
+print("\nbatches and classes, both derived — the rater is never asked again (F7/F13)")
+_sl = _c.execute(
+    "SELECT slate_id, count(*) n, max(score) top FROM lines "
+    "WHERE source_id='own' AND slate_id IS NOT NULL GROUP BY slate_id").fetchall()
+check(bool(_sl), f"a shared setup is recovered as a batch ({len(_sl)} found)")
+_win = _c.execute("SELECT count(*) FROM lines WHERE source_id='own' "
+                  "AND class='winner'").fetchone()[0]
+check(_win >= 1, f"the top of each batch is marked winner ({_win})")
+_lone = _c.execute(
+    "SELECT count(*) FROM lines WHERE source_id='own' AND slate_id IS NOT NULL "
+    "AND slate_id IN (SELECT slate_id FROM lines GROUP BY slate_id HAVING count(*)<2)"
+).fetchone()[0]
+check(_lone == 0, "a lone line is not called a batch")
+# Every score in the fixture survives being classified.
+_before = _c.execute("SELECT count(*) FROM lines WHERE source_id='own' "
+                     "AND score IS NOT NULL").fetchone()[0]
+check(_before == 7, f"classification changed no ratings ({_before} still scored)")
+
+_tp2 = server.HANDLERS["taste_profile"](n=4)
+check("rated_in_batches" in _tp2,
+      "taste_profile says scores are within-batch rankings, not absolute grades")
+check(_tp2["rated_in_batches"]["batches"] == len(_sl),
+      "and reports the batch count it actually found")
+
 print("\nriff: technique for a subject the corpus has never seen")
 _r = server.HANDLERS["riff"](subject="scheduling a concrete pour with the crew")
 check(_r["mechanisms_that_score"] or _r["exemplars"],

@@ -156,12 +156,25 @@ CREATE TABLE IF NOT EXISTS lines (
   -- worth reading. NULL means "this row is the canonical one". Ranked reads
   -- filter on it, so the same line stops occupying two slots; the duplicate
   -- keeps its own rating and stays reachable by id and by explicit kind.
-  origin_id INTEGER REFERENCES lines(id)
+  origin_id INTEGER REFERENCES lines(id),
+  -- The batch this line was rated in. Ratings were given best-of-batch, so a
+  -- score only means something against its siblings: 39 of 65 batches top out
+  -- at 2.0 and only 4 reach 3.0. Recording the batch is what makes an existing
+  -- score readable as the within-batch ranking it always was. Derived, never
+  -- asked of the rater.
+  slate_id INTEGER,
+  -- winner | fail | control. Derived too: a seeded helpful non-answer scores 0
+  -- with fit 0, a joke that genuinely missed scores 0 with fit above 0. Both
+  -- sat in one 0.0 bucket, which flatters any accuracy metric and hands the
+  -- wrong examples to anything asking what failure looks like.
+  class TEXT
 );
 CREATE INDEX IF NOT EXISTS lines_src ON lines(source_id);
 CREATE INDEX IF NOT EXISTS lines_score ON lines(score);
 CREATE INDEX IF NOT EXISTS lines_kind ON lines(kind);
 CREATE INDEX IF NOT EXISTS lines_origin ON lines(origin_id);
+CREATE INDEX IF NOT EXISTS lines_slate ON lines(slate_id);
+CREATE INDEX IF NOT EXISTS lines_class ON lines(class);
 
 CREATE TABLE IF NOT EXISTS pairs (
   id INTEGER PRIMARY KEY,
@@ -232,6 +245,68 @@ def link_duplicates(con):
         n_groups += 1
         n_rows += len(dupes)
     return n_groups, n_rows
+
+
+def mark_slates_and_class(con):
+    """Recover the rating batches, and split the 0.0 bucket. Returns a summary.
+
+    Neither of these asks the rater for anything new. Both are already implied
+    by the material and were simply never written down:
+
+    SLATES. Responses were generated and rated a setup at a time, so lines
+    sharing a setup were judged against each other and not against a fixed bar.
+    In the mallard pack that is 64 groups of exactly four. It matters because
+    only 4 of those batches contain a 3.0 while 39 top out at 2.0 — a 2.0 that
+    won its batch and a 2.0 that lost to a 3.0 are not the same judgement, and
+    without the batch id nothing downstream can tell them apart.
+
+    CLASS. Every batch carries a seeded helpful non-answer alongside the real
+    attempts, and all of them score 0. Those controls are trivially separable
+    and inflate any accuracy figure, while the jokes that genuinely missed are
+    the interesting negatives — and anything asking this corpus "what does
+    failure look like" was being handed the earnest non-jokes. `fit` separates
+    them: a control is fit 0, a real attempt that missed is fit above 0.
+    """
+    # A setup groups a batch. Only where the setup is real text and more than
+    # one rated line shares it — a lone line is not a batch.
+    groups = {}
+    for rid, src, ctx, score in con.execute(
+            "SELECT id, source_id, trim(coalesce(context,'')), score FROM lines "
+            "WHERE score IS NOT NULL ORDER BY id"):
+        if ctx:
+            groups.setdefault((src, ctx), []).append((rid, score))
+
+    slate_no, n_slates, n_rows = 0, 0, 0
+    for (_src, _ctx), members in sorted(groups.items(), key=lambda kv: kv[1][0][0]):
+        if len(members) < 2:
+            continue
+        slate_no += 1
+        n_slates += 1
+        n_rows += len(members)
+        con.executemany("UPDATE lines SET slate_id=? WHERE id=?",
+                        [(slate_no, rid) for rid, _ in members])
+        best = max(s for _, s in members)
+        # "Winner" only means it topped its own batch; that is the whole point.
+        con.executemany("UPDATE lines SET class='winner' WHERE id=?",
+                        [(rid,) for rid, s in members if s == best])
+
+    n_ctrl = n_fail = 0
+    for rid, score, bd in con.execute(
+            "SELECT id, score, breakdown FROM lines "
+            "WHERE score = 0 AND breakdown IS NOT NULL AND breakdown != ''"):
+        try:
+            fit = json.loads(bd).get("fit")
+        except Exception:
+            continue
+        if fit is None:
+            continue
+        if fit == 0:
+            con.execute("UPDATE lines SET class='control' WHERE id=?", (rid,))
+            n_ctrl += 1
+        else:
+            con.execute("UPDATE lines SET class='fail' WHERE id=?", (rid,))
+            n_fail += 1
+    return n_slates, n_rows, n_ctrl, n_fail
 
 
 LINE_COLS = ["source_id", "ext_id", "text", "context", "kind", "score", "laugh",
@@ -416,6 +491,14 @@ def build(only=None):
     if dup_groups:
         print(f"  {'linked':10s} {dup_rows} row(s) in {dup_groups} duplicate "
               f"group(s) point at a canonical copy (ranked reads show each once)")
+
+    n_slates, n_slated, n_ctrl, n_fail = mark_slates_and_class(con)
+    if n_slates:
+        print(f"  {'slates':10s} {n_slated} rated line(s) in {n_slates} batch(es) "
+              f"— scores are within-batch rankings, not a fixed bar")
+    if n_ctrl or n_fail:
+        print(f"  {'class':10s} {n_ctrl} seeded control(s) told apart from "
+              f"{n_fail} joke(s) that genuinely missed")
 
     con.execute("INSERT INTO lines_fts(rowid,text,context,note,tags) "
                 "SELECT id,text,coalesce(context,''),coalesce(note,''),coalesce(tags,'') "

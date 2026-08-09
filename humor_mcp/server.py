@@ -109,6 +109,9 @@ def row_out(r):
     # line, which on a breakdown-less result was a third to a half of the whole
     # payload, and tool results are spent straight out of the caller's context.
     # Rows now name their source and `credits` carries one block per source.
+    for k in ("class", "slate_id"):
+        if k in r.keys() and r[k] is not None:
+            d[k] = r[k]
     d["source"] = r["source_id"]
     if "origin_id" in r.keys() and r["origin_id"] is not None:
         # Reachable by id, so say why it is not turning up in ranked answers.
@@ -405,8 +408,16 @@ def t_taste_profile(rater=None, n=12, kind=None, include_restricted=False,
     rp = [rater] if rater else []
     hi = db().execute(f"SELECT * FROM lines WHERE {sf}{rq} AND score IS NOT NULL "
                       f"ORDER BY score DESC, id LIMIT ?", params + rp + [n]).fetchall()
-    lo = db().execute(f"SELECT * FROM lines WHERE {sf}{rq} AND score IS NOT NULL "
-                      f"ORDER BY score ASC, id LIMIT ?", params + rp + [n]).fetchall()
+    # Ordering the bottom by score alone serves the seeded controls — earnest
+    # helpful non-answers that scored 0 because they are not jokes at all. As
+    # "the failure mode to avoid" they teach the wrong lesson entirely; the
+    # useful negatives are the attempts that were jokes and missed. Prefer
+    # those where the corpus says which is which, and fall back to plain score
+    # for corpora that carry no class.
+    lo = db().execute(
+        f"SELECT * FROM lines WHERE {sf}{rq} AND score IS NOT NULL "
+        f"ORDER BY CASE class WHEN 'fail' THEN 0 WHEN 'control' THEN 2 ELSE 1 END, "
+        f"score ASC, id LIMIT ?", params + rp + [n]).fetchall()
     dist = db().execute(f"SELECT score, count(*) c FROM lines WHERE {sf}{rq} "
                         f"AND score IS NOT NULL GROUP BY score ORDER BY score DESC",
                         params + rp).fetchall()
@@ -416,10 +427,31 @@ def t_taste_profile(rater=None, n=12, kind=None, include_restricted=False,
         "score_distribution": {str(r["score"]): r["c"] for r in dist},
         "liked": [row_out(r) for r in hi],
         "disliked": [row_out(r) for r in lo],
-        "how_to_use": "These are absolute human ratings. Match the LIKED register; "
-                      "the DISLIKED set is the failure mode to avoid, not merely "
-                      "weaker material.",
+        "how_to_use": "Match the LIKED register; the DISLIKED set is the failure "
+                      "mode to avoid, not merely weaker material — where the corpus "
+                      "distinguishes them these are jokes that missed, not seeded "
+                      "non-answers.",
     }
+    # A score here is not an absolute grade. Say so, with the evidence, so a
+    # consumer does not read a 2.0 as "mediocre" when it won its batch.
+    slated = db().execute(
+        f"SELECT count(DISTINCT slate_id) s, count(*) n FROM lines "
+        f"WHERE {sf}{rq} AND slate_id IS NOT NULL", params + rp).fetchone()
+    if slated and slated["s"]:
+        ceil = db().execute(
+            f"SELECT max(score) m, count(*) c FROM (SELECT slate_id, max(score) score "
+            f"FROM lines WHERE {sf}{rq} AND slate_id IS NOT NULL GROUP BY slate_id) "
+            f"GROUP BY score ORDER BY count(*) DESC LIMIT 1", params + rp).fetchone()
+        res["rated_in_batches"] = {
+            "batches": slated["s"], "lines": slated["n"],
+            "most_common_batch_ceiling": ceil["m"] if ceil else None,
+            "why_it_matters": (
+                "Lines were rated a setup at a time, against their siblings rather "
+                "than a fixed bar, so a score is a within-batch ranking. Most "
+                "batches never contain a top score at all — read `score` together "
+                "with `slate_id`, and treat `class='winner'` as 'best of its "
+                "batch', not 'excellent'."),
+        }
     return with_credits(res, list(hi) + list(lo))
 
 
