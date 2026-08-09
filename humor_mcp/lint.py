@@ -14,8 +14,10 @@ owner decides.
   humor-mcp lint                 # everything, default thresholds
   humor-mcp lint --min-score 3   # only the lines used as exemplars
   humor-mcp lint --source mallard
+  humor-mcp lint --no-stock      # typos only, skip the phrasing report
 """
 import argparse
+import math
 import re
 import sys
 
@@ -94,6 +96,11 @@ def stock_phrases(rows, min_words=2, max_words=6, min_uses=2):
     Reuse across setups is evidence of a stock phrase; it is not proof, and a
     callback inside one batch is a device rather than a crutch — so phrases are
     only counted once per setup and need to appear under two different ones.
+
+    Ranked so the borrowed cores are actually visible: on the mallard pack
+    "chose violence" comes 8th, alongside "emotional support", "vendetta
+    against" and "hostage situation". Ranking by recurrence alone put it
+    295th behind ordinary collocations.
     """
     seen = {}
     for ctx, text in rows:
@@ -111,15 +118,41 @@ def stock_phrases(rows, min_words=2, max_words=6, min_uses=2):
                 here.add(" ".join(span))
         for ph in here:
             seen.setdefault(ph, set()).add(ctx or "")
+    # Ranking by how OFTEN a phrase recurs puts ordinary English on top: "at
+    # this point" recurs more than any borrowed move ever will. What marks a
+    # stock phrase is rare words in a reused combination — "violence" is
+    # distinctive, "point" is not. So weight each phrase by how unusual its
+    # words are in this corpus (plain idf over setups) and let recurrence be
+    # the smaller term. Ranking by count alone buried the known example 295th
+    # of 850; a finding you cannot see is not a finding.
+    docs = [set(re.findall(r"[a-z']+", (t or "").lower())) for _, t in rows]
+    n_docs = max(1, len(docs))
+    df = {}
+    for d in docs:
+        for w in d:
+            df[w] = df.get(w, 0) + 1
+
+    def rarity(phrase):
+        content = _content(phrase.split())
+        if not content:
+            return 0.0
+        return sum(math.log(n_docs / (1 + df.get(w, 0))) for w in content) / len(content)
+
+    def score(ph, n):
+        return rarity(ph) * math.log(1 + n)
+
     out = [(ph, len(ctxs)) for ph, ctxs in seen.items() if len(ctxs) >= min_uses]
-    # Keep the longest phrasing of each overlapping family, so "and chose
-    # violence anyway" does not report three times as its own substrings.
-    out.sort(key=lambda t: (-len(t[0]), -t[1]))
+    # One entry per overlapping family, and it must be the BEST-scoring member,
+    # not the longest. Keeping the longest suppressed "chose violence" under
+    # "didn't need it and chose violence", whose ordinary words drag its rarity
+    # down — so the borrowed core was hidden behind the sentence containing it.
+    # A stock phrase is the short distinctive bit; that is what makes it stock.
+    out.sort(key=lambda t: -score(*t))
     kept = []
     for ph, n in out:
-        if not any(ph in longer for longer, _ in kept):
-            kept.append((ph, n))
-    kept.sort(key=lambda t: (-t[1], -len(t[0])))
+        if any(ph in k or k in ph for k, _, _ in kept):
+            continue
+        kept.append((ph, n, round(rarity(ph), 2)))
     return kept
 
 
@@ -131,12 +164,8 @@ def main(argv=None):
                     help="only lines scored at least this highly (exemplar risk)")
     ap.add_argument("--source", default=None, help="restrict to one pack id")
     ap.add_argument("--db", default=None, help="database path (default: the usual)")
-    ap.add_argument("--stock", action="store_true",
-                    help="EXPERIMENTAL: list phrasing reused across setups. It "
-                         "does find real borrowings, but cannot yet rank them — "
-                         "the known example ('chose violence') lands 295th of "
-                         "850, so it needs rarity weighting before it is worth "
-                         "reading by default")
+    ap.add_argument("--no-stock", action="store_true",
+                    help="skip the reused-phrasing report")
     args = ap.parse_args(argv)
 
     import sqlite3
@@ -178,25 +207,26 @@ def main(argv=None):
                       f"{kind:<12} {conf:<12} {frag!r}")
 
     stock = []
-    if args.stock:
+    if not args.no_stock:
         print("reused phrasing (candidate stock phrases)")
         rows = [(r["context"], r["text"]) for r in con.execute(
-            f"SELECT context, text FROM lines WHERE {w}", params)]
+            f"SELECT context, text FROM lines WHERE {w} "
+            f"AND (class IS NULL OR class != 'control')", params)]
         rows += [(r["context"], r["context"]) for r in con.execute(
             f"SELECT DISTINCT context FROM lines WHERE {w} "
             f"AND context IS NOT NULL AND trim(context) != ''", params)]
         stock = stock_phrases(rows)
-        for ph, n in stock[:15]:
-            print(f"  {n} setups  {ph!r}")
+        for ph, n, rar in stock[:15]:
+            print(f"  {n} setups  rarity {rar:>5}  {ph!r}")
         if not stock:
             print("  (none reused across two or more setups)")
 
     print()
     print(f"{hits} finding(s), {likely} likely and {hits - likely} possibly "
           f"rhetorical ('Knock knock' is the joke, not a typo).")
-    if args.stock:
-        print(f"{len(stock)} phrase(s) reused across setups — evidence of borrowed "
-              f"shape, not a verdict, and not yet ranked usefully.")
+    if not args.no_stock:
+        print(f"{len(stock)} phrase(s) reused across setups, ranked by how unusual "
+              f"their words are — evidence of borrowed shape, not a verdict.")
     print("Nothing was changed — the wording is the corpus owner's to judge.")
     return 1 if likely else 0
 

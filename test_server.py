@@ -632,6 +632,49 @@ check("rated_in_batches" in _tp2,
 check(_tp2["rated_in_batches"]["batches"] == len(_sl),
       "and reports the batch count it actually found")
 
+print("\nlint ranks borrowed phrasing where it can be seen")
+from humor_mcp.lint import stock_phrases as _stock, findings as _find
+# A borrowed core reused across two setups, buried inside longer sentences
+# whose ordinary words would drag its rarity down — the shape that hid
+# "chose violence" behind "didn't need it and chose violence".
+_rows = [("setup one", "the printer knew and chose violence anyway"),
+         ("setup two", "my umbrella turned inside out and chose violence"),
+         ("setup three", "i think it is probably fine at this point"),
+         ("setup four", "i think it is probably fine at this point too"),
+         ("setup five", "well i think that it is fine at this point")]
+_st = _stock(_rows)
+_names = [p for p, _, _ in _st]
+check("chose violence" in _names,
+      f"the distinctive core is reported, not the sentence around it: {_names[:3]}")
+check(_names and _names[0] == "chose violence",
+      f"and it outranks ordinary collocations: {_names[:3]}")
+check(not any("at this point" == p for p in _names),
+      "a phrase of pure connective English is not called borrowed")
+check(all(not (a != b and (a in b or b in a)) for a in _names for b in _names),
+      "one entry per overlapping family")
+# The typo checks and the phrasing report are independent: a clean line with a
+# reused phrase is not a defect.
+check(_find("my umbrella turned inside out and chose violence") == [],
+      "a stock phrase is not reported as a typo")
+
+print("\ncontrast: the winner-vs-failure set assembles itself")
+from humor_mcp.contrast import slates as _slates
+_cs = _slates(_c, "own")
+if _cs:
+    _ids = [r["id"] for _, rows in _cs for r in rows]
+    _classes = {r["class"] for _, rows in _cs for r in rows}
+    check(_classes <= {"winner", "fail"},
+          f"controls are excluded — a seeded non-answer is not a failed joke: {_classes}")
+    check(all(any(r["class"] == "winner" for r in rows) and
+              any(r["class"] == "fail" for r in rows) for _, rows in _cs),
+          "every batch offered carries both sides of the contrast")
+else:
+    # The fixture's breakdowns carry no `fit`, so class stays unset there and
+    # there is nothing to contrast. Assert the honest empty rather than skip.
+    check(_c.execute("SELECT count(*) FROM lines WHERE source_id='own' "
+                     "AND class='fail'").fetchone()[0] == 0,
+          "no contrast set because the fixture has no classified failures")
+
 print("\nriff: technique for a subject the corpus has never seen")
 _r = server.HANDLERS["riff"](subject="scheduling a concrete pour with the crew")
 check(_r["mechanisms_that_score"] or _r["exemplars"],
