@@ -60,9 +60,19 @@ _pack("own", {"title": "Own work", "authors": "A. Owner", "license": "CC-BY-4.0"
              {"text": "Verdict: the second one lands.", "kind": "eval"},
              # An auto-segmented transcript offcut: starts lowercase, stops mid
              # sentence. Reads like a joke that died rather than half of one.
-             {"text": "and then the mailman said", "kind": "joke"}],
-      pairs=[{"prompt": "Tell me a joke.", "chosen": "The good one.",
-              "rejected": "The bad one.", "weight": 1.0},
+             {"text": "and then the mailman said", "kind": "joke"},
+             # The same rated line stored a second time without its analysis —
+             # the shape that fills a quarter of the mallard pack and made
+             # taste_profile(n=10) return six distinct lines. Note the missing
+             # attribution: one copy carrying it and the other not is how the
+             # real pack stores it, and treating that as a provenance conflict
+             # linked nothing at all on the first attempt.
+             {"text": "The dog has filed a complaint about the mailman.",
+              "context": "asked how the pets are", "kind": "candidate",
+              "score": 3, "rater": "owner"}],
+      pairs=[{"prompt": "Tell me a joke.",
+              "chosen": "The dog has filed a complaint about the mailman.",
+              "rejected": "This one did not work at all.", "weight": 1.0},
              {"prompt": "Again.", "chosen": "Also good.", "rejected": "Also bad."}])
 
 # licence says it may not leave this machine
@@ -222,13 +232,13 @@ def body(i):
 
 print("protocol")
 check(resp[1]["result"]["serverInfo"]["name"] == "humor-mcp", "initialize")
-check(2 not in [r for r in resp if False] and len(resp[2]["result"]["tools"]) == 8,
-      "tools/list returns 8 tools")
+check(2 not in [r for r in resp if False] and len(resp[2]["result"]["tools"]) == 10,
+      "tools/list returns 10 tools")
 check(all("inputSchema" in t for t in resp[2]["result"]["tools"]), "every tool has a schema")
 
 print("\ncorpus")
 st = body(3)
-check(st["lines"] == 13, f"every fixture line loaded = {st['lines']}")
+check(st["lines"] == 14, f"every fixture line loaded = {st['lines']}")
 check(st["pairs"] == 42, f"every fixture pair loaded = {st['pairs']}")
 check(st["sources"] == 4, f"sources = {st['sources']}")
 check({"own", "locked", "offrubric", "unverified"} == set(st["by_source"]) | {"offrubric"},
@@ -250,12 +260,13 @@ check(all(s["hidden_reason"] for s in src if s["default_hidden"]),
 print("\nresults carry credit")
 r5 = body(5)
 check(r5["count"] > 0, f"search returned {r5['count']}")
-check(all("credit" in x and x["credit"].get("authors") for x in r5["results"]),
-      "every search hit carries authorship")
-srcs_default = {x["credit"]["source"] for x in r5["results"]}
+check(all("source" in x for x in r5["results"]) and
+      all(c.get("authors") for c in r5["credits"].values()),
+      "authorship travels once per source, not once per row")
+srcs_default = {x["source"] for x in r5["results"]}
 check("locked" not in srcs_default, "restricted pack hidden by default")
 r6 = body(6)
-check(any(x["credit"]["source"] == "locked" for x in r6["results"]),
+check(any(x["source"] == "locked" for x in r6["results"]),
       "include_restricted widens the search")
 
 print("\nper-line attribution")
@@ -286,7 +297,7 @@ print(q('''select count(*) from (select source_id,text,attribution from lines
 """ % FDB], capture_output=True, text=True)
 dupes, total, with_bd, split = (int(x) for x in p.stdout.split())
 check(dupes == 0, f"no (text, attribution) duplicates in the build: {dupes}")
-check(total == 13, f"all fixture lines present: {total}")
+check(total == 14, f"all fixture lines present: {total}")
 check(with_bd == 2, f"breakdown json survives the build: {with_bd}")
 check(split == 1, f"same text under different credit stays separate: {split} case(s)")
 
@@ -294,25 +305,28 @@ print("\ntools")
 check(len(body(7)["results"]) > 0, "top_rated")
 tp = body(8)
 check(tp["liked"] and tp["disliked"], "taste_profile has both poles")
-check(all("credit" in x for x in tp["liked"]), "taste_profile credits its lines")
+check(all(x["source"] in tp["credits"] for x in tp["liked"]),
+      "taste_profile credits its lines, once per source")
 check(body(9)["count"] >= 0, "breakdown")
 pr = body(10)
-check(all("credit" in x for x in pr["results"]), "preference pairs credited")
+check(all(x["source"] in pr["credits"] for x in pr["results"]),
+      "preference pairs credited")
 sp = body(11)
 check("attribution_block" in sp and sp["attribution_block"].strip(), "style_pack ships credit")
-check(all("credit" in e for e in sp["exemplars"]), "style_pack exemplars credited")
+check(all(e["source"] in sp["credits"] for e in sp["exemplars"]),
+      "style_pack exemplars credited")
 
 print("\noff-rubric gate (separate from the licence gate)")
 d14, d15, d16 = body(14), body(15), body(16)
-def_srcs = {x["credit"]["source"] for x in d14["results"]}
+def_srcs = {x["source"] for x in d14["results"]}
 check(def_srcs == {"own"}, f"default pairs are on-rubric only: {sorted(def_srcs)}")
 check(set(d14.get("withheld", {}).get("packs", {})) == {"offrubric"},
       f"withheld is reported, not silent: {d14.get('withheld', {}).get('packs')}")
-check("offrubric" in {x["credit"]["source"] for x in d15["results"]},
+check("offrubric" in {x["source"] for x in d15["results"]},
       "include_hidden reaches them")
-check({x["credit"]["source"] for x in d16["results"]} == {"offrubric"},
+check({x["source"] for x in d16["results"]} == {"offrubric"},
       "naming the pack overrides the gate")
-check(all("off_rubric" in x["credit"] for x in d16["results"]),
+check(all("off_rubric" in d16["credits"][x["source"]] for x in d16["results"]),
       "off-rubric packs say why when you do pull them")
 srcs = {s["id"]: s for s in body(4)["sources"]}
 check(srcs["offrubric"]["redistributable"] and srcs["offrubric"]["default_hidden"],
@@ -365,12 +379,12 @@ check(".replace('source_id'" not in src and '.replace("source_id"' not in src,
       "no string-patching of SQL left in the file")
 
 d20, d21, d22 = body(20), body(21), body(22)
-s20 = {x["credit"]["source"] for x in d20["results"]}
+s20 = {x["source"] for x in d20["results"]}
 check(d20["count"] > 0 and s20 == {"locked"},
       f"aliased FTS + source= returns that pack: {d20['count']} from {sorted(s20)}")
-check("locked" not in {x["credit"]["source"] for x in d21["results"]},
+check("locked" not in {x["source"] for x in d21["results"]},
       "same query without source= still excludes the restricted pack")
-s22 = {x["credit"]["source"] for x in d22["results"]}
+s22 = {x["source"] for x in d22["results"]}
 check(d22["count"] > 0 and s22 == {"locked"},
       f"aliased non-FTS browse + source= also works: {sorted(s22)}")
 
@@ -519,6 +533,90 @@ check("REMOVES" not in _f, "a build that loses nothing does not cry wolf")
 print("\nrobustness")
 check(not resp[12].get("result", {}).get("isError"), "FTS-hostile query handled")
 check(resp[13]["result"].get("isError"), "unknown tool errors cleanly")
+
+# ---------------------------------------------------------------- the F-series
+# Direct in-process calls: these assert the tools' contracts, not the transport.
+# ⚠ Point the module at the FIXTURE before importing it. An earlier probe in
+# this file silently read the author's private ~/.humor-mcp/humor.db, passed
+# locally, and crashed on a clean clone — so the first thing asserted below is
+# that this suite is reading its own corpus and nobody else's.
+os.environ["HUMOR_DB"] = str(FDB)
+os.environ["HUMOR_PACKS"] = str(FPACKS)
+from humor_mcp import server as server_mod
+server = server_mod
+
+print("\nthe suite is reading its own fixture, not a private corpus")
+check(str(server.DB_PATH) == str(FDB),
+      f"server loaded the fixture db ({server.DB_PATH})")
+
+print("\nduplicate lines occupy one slot, not two (F4)")
+import sqlite3
+_c = sqlite3.connect(FDB)
+_dupes = _c.execute(
+    "SELECT id, kind, score, origin_id FROM lines WHERE source_id='own' "
+    "AND text = 'The dog has filed a complaint about the mailman.' "
+    "ORDER BY id").fetchall()
+check(len(_dupes) == 2, f"fixture stores the line twice ({len(_dupes)})")
+_canon = [r for r in _dupes if r[3] is None]
+_link = [r for r in _dupes if r[3] is not None]
+check(len(_canon) == 1 and len(_link) == 1,
+      "exactly one copy is canonical and one points at it")
+check(_canon[0][1] == "joke" and _link[0][1] == "candidate",
+      "the analysed copy is the canonical one, not whichever came first")
+check(_link[0][2] == 3.0, "the duplicate KEEPS its rating — nothing is discarded")
+check(_link[0][3] == _canon[0][0], "the link points at the canonical id")
+
+# The two-performers case: same words, different attribution. Merging these
+# would credit one performer with the other's line, so they must both stand.
+_two = _c.execute(
+    "SELECT origin_id FROM lines WHERE source_id='locked' "
+    "AND text = 'The same words from two different mouths.'").fetchall()
+check(len(_two) == 2 and all(r[0] is None for r in _two),
+      "same words from different mouths are NEVER merged")
+
+_tp = server.HANDLERS["taste_profile"](n=10)
+_texts = [x["text"] for x in _tp["liked"]]
+check(len(_texts) == len(set(_texts)),
+      f"taste_profile returns distinct lines ({len(set(_texts))}/{len(_texts)})")
+_cand = server.HANDLERS["search_humor"](kind="candidate")
+check(any(x["text"].startswith("The dog has filed") for x in _cand["results"]),
+      "naming kind='candidate' still reaches the rows the filter hides")
+
+print("\ncredit travels once per source, not once per row (F11)")
+_s = server.HANDLERS["search_humor"](query="dog", limit=5)
+check(all("credit" not in r for r in _s["results"]), "no per-row credit block")
+check(all(r["source"] in _s["credits"] for r in _s["results"]),
+      "every row's source resolves in the credits map")
+
+print("\nAPI additions (F12)")
+check(_s["total"] >= _s["returned"], f"total {_s['total']} >= returned {_s['returned']}")
+check(bool(_s.get("order")), "result ordering is stated, not guessed at")
+_p = server.HANDLERS["preference_pairs"](limit=5)
+check(any("chosen_id" in x or "rejected_id" in x for x in _p["results"]),
+      "pairs resolve to line ids where the text is unambiguous")
+_g = server.HANDLERS["get_line"](id=_link[0][0])
+check(_g["line"]["duplicate_of"] == _canon[0][0] and "duplicate_of_line" in _g["line"],
+      "get_line on a duplicate names the canonical copy")
+try:
+    server.HANDLERS["get_line"](id=10 ** 9)
+    check(False, "get_line on a missing id errors")
+except ValueError:
+    check(True, "get_line on a missing id errors")
+try:
+    server.HANDLERS["search_humor"](kind="nosuchkind")
+    check(False, "an unknown kind errors instead of returning empty")
+except ValueError as e:
+    check("available" in str(e), "an unknown kind errors and lists the real ones")
+
+print("\nriff: technique for a subject the corpus has never seen")
+_r = server.HANDLERS["riff"](subject="scheduling a concrete pour with the crew")
+check(_r["mechanisms_that_score"] or _r["exemplars"],
+      "riff answers even when nothing matches the subject")
+check("liked" in _r and "disliked" in _r, "riff carries the register both ways")
+check(_r["subject"] == "scheduling a concrete pour with the crew",
+      "riff echoes the subject it was given")
+_j = json.dumps(_r)
+check("credits" in _r, "riff credits its material")
 
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)

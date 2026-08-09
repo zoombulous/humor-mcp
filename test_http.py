@@ -115,13 +115,13 @@ try:
 
     print("tools over the wire")
     c, r = http(port, data={"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
-    check(c == 200 and len(r["result"]["tools"]) == 8, "tools/list serves all 8")
+    check(c == 200 and len(r["result"]["tools"]) == 10, "tools/list serves all 10")
     c, r = http(port, data={"jsonrpc": "2.0", "id": 4, "method": "tools/call",
                             "params": {"name": "search_humor",
                                        "arguments": {"query": "dog"}}})
     hit = json.loads(r["result"]["content"][0]["text"])
     check(c == 200 and hit["count"] == 1 and
-          hit["results"][0]["credit"]["source"] == "own",
+          hit["results"][0]["source"] == "own" and hit["credits"]["own"]["authors"],
           "tools/call returns the line with its credit")
     c, r = http(port, path="/mcp/", data={"jsonrpc": "2.0", "id": 5, "method": "ping"})
     check(c == 200 and r["result"] == {}, "trailing-slash path serves too")

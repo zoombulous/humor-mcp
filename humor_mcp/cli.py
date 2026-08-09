@@ -25,6 +25,7 @@ SUBCOMMANDS = {
     "import-transcript": ("humor_mcp.import_transcript", "import a transcript"),
     "import-audio": ("humor_mcp.import_audio", "import audio + a timed transcript"),
     "reactions": ("humor_mcp.audio_reactions", "list detected audience reactions"),
+    "lint": ("humor_mcp.lint", "report doubled words and stray markup (never rewrites)"),
 }
 
 

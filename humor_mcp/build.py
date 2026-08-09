@@ -151,11 +151,17 @@ CREATE TABLE IF NOT EXISTS lines (
   tags TEXT,
   breakdown TEXT,
   attribution TEXT,
-  meta TEXT
+  meta TEXT,
+  -- Set on a row that merely repeats another row's text, pointing at the copy
+  -- worth reading. NULL means "this row is the canonical one". Ranked reads
+  -- filter on it, so the same line stops occupying two slots; the duplicate
+  -- keeps its own rating and stays reachable by id and by explicit kind.
+  origin_id INTEGER REFERENCES lines(id)
 );
 CREATE INDEX IF NOT EXISTS lines_src ON lines(source_id);
 CREATE INDEX IF NOT EXISTS lines_score ON lines(score);
 CREATE INDEX IF NOT EXISTS lines_kind ON lines(kind);
+CREATE INDEX IF NOT EXISTS lines_origin ON lines(origin_id);
 
 CREATE TABLE IF NOT EXISTS pairs (
   id INTEGER PRIMARY KEY,
@@ -173,6 +179,60 @@ CREATE INDEX IF NOT EXISTS pairs_src ON pairs(source_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_fts
   USING fts5(text, context, note, tags, content='lines', content_rowid='id');
 """
+
+def link_duplicates(con):
+    """Point repeated texts at the one copy worth reading. Returns (groups, rows).
+
+    The same line can be stored twice: once analysed and once bare — in the
+    mallard pack every rated `joke` also exists as a rated `candidate` with the
+    identical score, 256 of them, a quarter of every rating in the corpus. Both
+    are real rows and both keep their score; what is wrong is letting one line
+    occupy two slots in a ranked answer, which is why `taste_profile(n=10)` was
+    returning six distinct lines.
+
+    ⚠ Never link on text alone. Two performers can say the same words, and
+    merging them would credit one with the other's line — the rule the pack
+    importers already follow. So a group is only linked when it cannot be two
+    different people or two different judgements:
+
+      * more than one distinct non-empty attribution -> leave every row alone
+        (that is the two-performers case the rule exists for)
+      * more than one distinct score -> leave every row alone, because one of
+        the ratings would vanish from ranked reads and a disagreement about a
+        line is a fact worth seeing, not a duplicate worth hiding
+
+    An attribution present on one copy and absent on the other is NOT a
+    conflict — that is how the mallard pack stores it, and treating it as one
+    linked nothing at all on the first run.
+
+    Canonical = the row carrying a breakdown (the analysed copy is the useful
+    one), tie-broken by lowest id so a rebuild always picks the same winner.
+    """
+    # This connection has no row_factory, so unpack positionally.
+    rows = con.execute(
+        "SELECT id, source_id, text, coalesce(attribution,''), score, "
+        "       (breakdown IS NOT NULL AND breakdown != '') "
+        "FROM lines ORDER BY id").fetchall()
+    groups = {}
+    for rid, src, text, attr, score, analysed in rows:
+        groups.setdefault((src, text), []).append((rid, attr, score, analysed))
+
+    n_groups = n_rows = 0
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        attrs = {a for _, a, _, _ in members if a}
+        scores = {s for _, _, s, _ in members if s is not None}
+        if len(attrs) > 1 or len(scores) > 1:
+            continue
+        canonical = min(members, key=lambda m: (0 if m[3] else 1, m[0]))
+        dupes = [rid for rid, _, _, _ in members if rid != canonical[0]]
+        con.executemany("UPDATE lines SET origin_id=? WHERE id=?",
+                        [(canonical[0], i) for i in dupes])
+        n_groups += 1
+        n_rows += len(dupes)
+    return n_groups, n_rows
+
 
 LINE_COLS = ["source_id", "ext_id", "text", "context", "kind", "score", "laugh",
              "rater", "note", "tags", "breakdown", "attribution", "meta"]
@@ -351,6 +411,11 @@ def build(only=None):
               f"{meta['license']:20s} {red}{flag}")
         total_l += nl
         total_p += np
+
+    dup_groups, dup_rows = link_duplicates(con)
+    if dup_groups:
+        print(f"  {'linked':10s} {dup_rows} row(s) in {dup_groups} duplicate "
+              f"group(s) point at a canonical copy (ranked reads show each once)")
 
     con.execute("INSERT INTO lines_fts(rowid,text,context,note,tags) "
                 "SELECT id,text,coalesce(context,''),coalesce(note,''),coalesce(tags,'') "
