@@ -657,6 +657,18 @@ check(all(not (a != b and (a in b or b in a)) for a in _names for b in _names),
 check(_find("my umbrella turned inside out and chose violence") == [],
       "a stock phrase is not reported as a typo")
 
+print("\nthe advertised schema matches what the tool actually demands")
+_defs = {t["name"]: t for t in server.tool_defs()}
+check("id" in _defs["get_line"]["inputSchema"].get("required", []),
+      "get_line advertises id as required, because a call without it always fails")
+for _n, _t in _defs.items():
+    _s = _t["inputSchema"]
+    _props = _s.get("properties", {})
+    check(all(r in _props for r in _s.get("required", [])),
+          f"{_n}: every required param is a declared property")
+    check(all("type" in p and "description" in p for p in _props.values()),
+          f"{_n}: every param carries a type and a description")
+
 print("\ncontrast: the winner-vs-failure set assembles itself")
 from humor_mcp.contrast import slates as _slates
 _cs = _slates(_c, "own")

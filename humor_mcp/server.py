@@ -861,6 +861,14 @@ PARAM_DOC = {
                 "Used only to bias exemplar choice within this call; never stored"),
 }
 
+# Parameters a tool cannot work without, where the Python signature cannot say
+# so. `id=None` is kept as a default purely so the tool can raise a useful
+# message instead of a bare TypeError — but the advertised schema must still
+# tell a caller the argument is mandatory, or it invites a call that always
+# fails. Signature-derived schemas are only honest while nothing overrides them
+# silently.
+REQUIRED_PARAMS = {"get_line": ["id"]}
+
 # Where a tool's parameter genuinely differs from the shared description.
 PARAM_DOC_BY_TOOL = {
     "preference_pairs": {
@@ -963,6 +971,14 @@ def param_schema(fn, tool_name=None):
             spec["type"] = "number"
             spec["description"] += " (inclusive: 2.5 means score >= 2.5)"
         props[name] = spec
+    for name in REQUIRED_PARAMS.get(tool_name or "", []):
+        if name not in props:
+            raise RuntimeError(
+                f"{tool_name}: REQUIRED_PARAMS names {name!r}, which is not a "
+                "parameter of the function — the override has drifted from the "
+                "signature it is meant to correct.")
+        if name not in required:
+            required.append(name)
     return props, required
 
 
